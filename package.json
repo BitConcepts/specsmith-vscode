@@ -106,6 +106,21 @@
         "specsmith.watchedProjects": {
           "type": "array", "items": { "type": "string" }, "default": [],
           "description": "Project directories to persist in the sidebar."
+        },
+        "specsmith.ollamaContextLength": {
+          "type": "number",
+          "default": 0,
+          "enum": [0, 4096, 8192, 16384, 32768, 65536, 131072],
+          "enumDescriptions": [
+            "Auto-detect based on GPU VRAM (recommended)",
+            "4K tokens — safe for all hardware",
+            "8K tokens — 4-8GB VRAM",
+            "16K tokens — 8-16GB VRAM",
+            "32K tokens — 16-24GB VRAM",
+            "64K tokens — 24GB+ VRAM",
+            "128K tokens — 24GB+ VRAM (supported models only)"
+          ],
+          "description": "Ollama context window size (num_ctx). 0 = auto-detect from GPU VRAM. Session-specific: changing this takes effect when you open a new session."
         }
       }
     }

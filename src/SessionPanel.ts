@@ -45,6 +45,7 @@ export class SessionPanel implements vscode.Disposable {
   private readonly _panel: vscode.WebviewPanel;
   private readonly _bridge: SpecsmithBridge;
   private _config: SessionConfig;
+  private _ollamaCtx: number;
   private _status: SessionStatus = 'starting';
   private _disposables: vscode.Disposable[] = [];
   private readonly _secrets: vscode.SecretStorage;
@@ -63,6 +64,23 @@ export class SessionPanel implements vscode.Disposable {
     const cfg      = vscode.workspace.getConfiguration('specsmith');
     const execPath = cfg.get<string>('executablePath', 'specsmith');
     const envOverrides = await ApiKeyManager.getAllEnv(context.secrets);
+
+    // Determine Ollama context length (VRAM-aware, or from setting)
+    let ollamaCtx = 0;
+    if (provider === 'ollama') {
+      const cfgCtx = cfg.get<number>('ollamaContextLength', 0);
+      if (cfgCtx > 0) {
+        ollamaCtx = cfgCtx;
+      } else {
+        // Auto-detect from GPU VRAM
+        const { OllamaManager } = await import('./OllamaManager');
+        const vram = await OllamaManager.getVramGb();
+        if (vram >= 16)      { ollamaCtx = 32768; }
+        else if (vram >= 8)  { ollamaCtx = 16384; }
+        else if (vram >= 4)  { ollamaCtx = 8192;  }
+        else                 { ollamaCtx = 4096;  }
+      }
+    }
 
     // Load saved provider/model for this project.
     // Only use the saved provider if its API key is still configured
@@ -86,7 +104,7 @@ export class SessionPanel implements vscode.Disposable {
       { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [] },
     );
 
-    const inst = new SessionPanel(panel, config, execPath, envOverrides, context.secrets, context.globalState);
+    const inst = new SessionPanel(panel, config, execPath, envOverrides, context.secrets, context.globalState, ollamaCtx);
     SessionPanel._instances.push(inst);
     SessionPanel._current = inst;
     return inst;
@@ -104,13 +122,15 @@ export class SessionPanel implements vscode.Disposable {
     envOverrides: Record<string, string>,
     secrets: vscode.SecretStorage,
     globalState: vscode.Memento,
+    ollamaCtx = 0,
   ) {
     this._panel       = panel;
     this._config      = config;
+    this._ollamaCtx   = ollamaCtx;
     this._secrets     = secrets;
     this._globalState = globalState;
     this._initChatHistory();
-    this._bridge  = new SpecsmithBridge(execPath, config, envOverrides);
+    this._bridge  = new SpecsmithBridge(execPath, config, envOverrides, ollamaCtx);
 
     this._panel.webview.html = this._html();
 
@@ -222,13 +242,17 @@ export class SessionPanel implements vscode.Disposable {
           model: this._config.model, projectDir: this._config.projectDir,
           models: getStaticModels(this._config.provider),
         } satisfies SpecsmithEvent);
-        // Offer previous chat session replay
+        // Offer previous chat session replay (last 40 messages as proper bubbles)
         const prev = this._loadPreviousChat();
         if (prev.length > 0) {
-          void this._panel.webview.postMessage({ type: 'system', message: `── Previous session (${prev.length} messages) ──` } satisfies SpecsmithEvent);
-          for (const e of prev) {
-            if (e.role === 'user')   { void this._panel.webview.postMessage({ type: 'system', message: `You: ${e.text.slice(0, 120)}${e.text.length > 120 ? '…' : ''}` }); }
-            else if (e.role === 'agent') { void this._panel.webview.postMessage({ type: 'llm_chunk', text: e.text }); }
+          void this._panel.webview.postMessage({ type: 'system', message: `── Previous session (${prev.length} messages, showing last 40) ──` } satisfies SpecsmithEvent);
+          for (const e of prev.slice(-40)) {
+            const ts = _fmtTs(e.ts);
+            if (e.role === 'user') {
+              void this._panel.webview.postMessage({ type: 'history_user', text: e.text, message: ts } satisfies SpecsmithEvent);
+            } else if (e.role === 'agent') {
+              void this._panel.webview.postMessage({ type: 'history_agent', text: e.text, message: ts } satisfies SpecsmithEvent);
+            }
           }
           void this._panel.webview.postMessage({ type: 'system', message: '── New session ──' } satisfies SpecsmithEvent);
         }
@@ -355,7 +379,7 @@ export class SessionPanel implements vscode.Disposable {
     void this._panel.webview.postMessage({ type: 'models', models } satisfies SpecsmithEvent);
   }
 
-  // ── Settings persistence ───────────────────────────────────────────────────
+  // ── Settings persistence
 
   private _saveSettings(): void {
     const key = `specsmith.session.${this._config.projectDir}`;
@@ -444,7 +468,8 @@ export class SessionPanel implements vscode.Disposable {
   .thdr{color:var(--amb);font-weight:600;font-family:var(--mn);margin-bottom:3px}
   .tb.er .thdr{color:var(--red)}
   .tres{color:var(--dim);font-family:var(--mn);font-size:11px;max-height:100px;overflow:hidden;white-space:pre-wrap;word-break:break-all}
-  .sl{align-self:center;color:var(--dim);font-size:11px;font-style:italic;text-align:center}
+  .sl{align-self:flex-start;color:var(--dim);font-size:11px;font-style:italic;padding:1px 4px;display:flex;gap:6px;align-items:baseline}
+  .sl .mts{font-size:9px;opacity:.6;flex-shrink:0}
   .el{align-self:flex-start;color:var(--red);font-size:12px;background:rgba(244,71,71,.08);border-left:3px solid var(--red);border-radius:3px;padding:4px 9px;max-width:93%}
   .el details summary{cursor:pointer;list-style:none;outline:none}
   .el details summary::-webkit-details-marker{display:none}
@@ -562,22 +587,26 @@ function rmd(r){
 }
 const C=document.getElementById('chat');
 function sb2(){C.scrollTop=C.scrollHeight}
-function addU(t){lastU=t;const d=document.createElement('div');d.className='mu';d.dataset.raw=t;
-  d.innerHTML=\`<div class="bbl">\${esc(t)}</div><div class="mt">\${ts()}</div>
+function addU(t,customTs){
+  lastU=t;const d=document.createElement('div');d.className='mu';d.dataset.raw=t;
+  d.innerHTML=\`<div class="bbl">\${esc(t)}</div><div class="mt">\${customTs||ts()}</div>
   <div class="mact"><button class="ab" title="Copy" onclick="cp(this)">⎘</button>
   <button class="ab" title="Edit" onclick="ed(this)">✏</button></div>\`;
   C.appendChild(d);sb2()}
-function addA(t){const d=document.createElement('div');d.className='ma';d.dataset.raw=t;
+function addA(t,customTs){const d=document.createElement('div');d.className='ma';d.dataset.raw=t;
   d.innerHTML=\`<div class="rtag">🧠 AEE Agent</div><div class="bbl">\${rmd(t)}</div>
-  <div class="mt">\${ts()}</div><div class="mact">
+  <div class="mt">\${customTs||ts()}</div><div class="mact">
   <button class="ab" title="Copy" onclick="cp(this)">⎘</button>
-  <button class="ab" title="Regenerate" onclick="regen()">↺</button></div>\`;
+  <button class="ab" title="Regenerate" onclick="regen()">&#x21BA;</button></div>\`;
   C.appendChild(d);sb2()}
 function addT(n,r,e){const d=document.createElement('div');d.className='tb'+(e?' er':'');
   d.innerHTML=\`<div class="thdr">\${e?'❌':'✅'} \${esc(n)}</div>
   <div class="tres">\${esc((r||'').slice(0,500))}\${(r||'').length>500?'<em>…</em>':''}</div>\`;
   C.appendChild(d);sb2()}
-function addS(m){const d=document.createElement('div');d.className='sl';d.textContent=m;C.appendChild(d);sb2()}
+function addS(m){
+  const d=document.createElement('div');d.className='sl';
+  d.innerHTML=\`<span>\${esc(m)}</span><span class="mts">\${ts()}</span>\`;
+  C.appendChild(d);sb2()}
 /* Known specsmith error patterns → short human-friendly message */
 const ERR_MAP=[
   [/No such command 'run'/,                'specsmith version too old — upgrade: Ctrl+Shift+P → specsmith: Install or Upgrade'],
@@ -585,6 +614,9 @@ const ERR_MAP=[
   [/invalid_api_key|Incorrect API key/i,   'Invalid API key — reset via: Ctrl+Shift+P → specsmith: Set API Key'],
   [/error code.*401|status.*401/i,         'Authentication failed (401) — check your API key: Ctrl+Shift+P → specsmith: Set API Key'],
   [/Provider error.*401/i,                 'Wrong API key (401) — Ctrl+Shift+P → specsmith: Set API Key'],
+  [/ECONNREFUSED|connection refused/i,      'Ollama not running — start it: run ollama serve or open the Ollama app'],
+  [/404.*model|model.*not found/i,          'Model not downloaded — Ctrl+Shift+P → specsmith: Download Ollama Model'],
+  [/failed to load model/i,                 'Model failed to load — may need more VRAM or a smaller model'],
   [/insufficient_quota|exceeded.*quota/i,  'OpenAI quota exceeded — add credits at platform.openai.com/settings/billing'],
   [/Provider error.*429/i,                 'Rate limit (429) — quota exceeded, add billing credits or wait and retry'],
   [/error code.*429/i,                     'Rate limit (429) — quota exceeded or too many requests'],
@@ -768,6 +800,12 @@ window.addEventListener('message',({data})=>{switch(data.type){
     addS(data.message||'Chat cleared.');
     setBusy(false);
     break;
+  case 'history_user':
+    addU(data.text||'', data.message); // data.message = historical timestamp
+    break;
+  case 'history_agent':
+    addA(data.text||'', data.message);
+    break;
   case 'file_picked':if(data.isImage&&data.dataUrl){addImg(data.dataUrl,data.fileName||'img');const i=document.getElementById('it');i.value=\`[Image: \${data.fileName}]\\n\${i.value}\`}
     else if(data.fileContent!==undefined){const i=document.getElementById('it');const p=data.fileContent.length>8000?data.fileContent.slice(0,8000)+'\\n…':data.fileContent;i.value=\`[File: \${data.fileName}]\\n\\\`\\\`\\\`\\n\${p}\\n\\\`\\\`\\\`\\n\\n\${i.value}\`;i.focus()}break;
 }});
@@ -776,4 +814,14 @@ vscode.postMessage({command:'ready'});
 </body>
 </html>`;
   }
+}
+
+/** Format an ISO timestamp for display in history replay. */
+function _fmtTs(iso: string): string {
+  try {
+    return new Date(iso).toLocaleString([], {
+      month: 'short', day: 'numeric',
+      hour: '2-digit', minute: '2-digit',
+    });
+  } catch { return ''; }
 }

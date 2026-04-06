@@ -70,18 +70,22 @@ export class SpecsmithBridge {
   private _pending: string[] = [];
   private _turnTimer: ReturnType<typeof setTimeout> | undefined;
   private _startupTimer: ReturnType<typeof setTimeout> | undefined;
+  private _suppressNextExit = false; // set before voluntary restart to suppress exit message
   private readonly _execPath: string;
   private _config: SessionConfig;
   private _envOverrides: Record<string, string>;
+  private _ollamaCtx: number; // context length for Ollama (0 = default)
 
   constructor(
     execPath: string,
     config: SessionConfig,
     envOverrides: Record<string, string> = {},
+    ollamaCtx = 0,
   ) {
     this._execPath = execPath;
     this._config = { ...config };
     this._envOverrides = envOverrides;
+    this._ollamaCtx = ollamaCtx;
   }
 
   // ── Lifecycle ──────────────────────────────────────────────
@@ -89,6 +93,7 @@ export class SpecsmithBridge {
   public start(): void { this._spawn(); }
 
   public restart(config: SessionConfig, envOverrides?: Record<string, string>): void {
+    this._suppressNextExit = true; // switching model/provider — don't show exit message
     this._config = { ...config };
     if (envOverrides) { this._envOverrides = envOverrides; }
     this._ready = false;
@@ -175,6 +180,10 @@ export class SpecsmithBridge {
     if (this._config.model)    { args.push('--model',    this._config.model);    }
 
     const env = augmentedEnv({ ...process.env, ...this._envOverrides });
+    // Inject Ollama context length when using the ollama provider
+    if (this._config.provider === 'ollama' && this._ollamaCtx > 0) {
+      env.SPECSMITH_OLLAMA_NUM_CTX = String(this._ollamaCtx);
+    }
 
     // Warn if specsmith hasn't emitted 'ready' within 20 seconds
     this._startupTimer = setTimeout(() => {
@@ -237,8 +246,13 @@ export class SpecsmithBridge {
       } else if (/No such command.*run/i.test(text)) {
         this._emit({ type: 'error',
           message: 'specsmith v0.3.0+ required (missing \'run\' command)\nUpgrade: Ctrl+Shift+P → specsmith: Install or Upgrade' });
+      } else if (/connection refused|failed to connect|ECONNREFUSED/i.test(text)) {
+        this._emit({ type: 'error',
+          message: 'Ollama not running — start it: run ollama serve (or open Ollama app)' });
+      } else if (/404.*not found|model.*not found|pull model manifest/i.test(text)) {
+        this._emit({ type: 'error',
+          message: `Model not found in Ollama — download it: specsmith ollama pull <model>` });
       } else if (/Error:/i.test(text) || /error:/i.test(text)) {
-        // Stderr lines that are errors — emit as error type
         this._emit({ type: 'error', message: text });
       } else {
         this._emit({ type: 'system', message: text });
@@ -247,8 +261,14 @@ export class SpecsmithBridge {
 
     this._proc.on('exit', (code, signal) => {
       this._ready = false;
-      this._proc = null; // Mark as dead so send() can auto-respawn
+      this._proc = null;
       this._clearTurnTimer();
+      // Suppress message for voluntary restarts (model/provider switch)
+      if (this._suppressNextExit) {
+        this._suppressNextExit = false;
+        this._emit({ type: 'turn_done' });
+        return;
+      }
       const isError = (code !== 0 && code !== null) || signal !== null;
       this._setStatus(isError ? 'error' : 'inactive');
       const ts = new Date().toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });

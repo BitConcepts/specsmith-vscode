@@ -16,7 +16,9 @@ export interface SpecsmithEvent {
     | 'models'      // synthetic: extension host → webview with dynamic model list
     | 'chat_export'   // synthetic: extension host → webview with export file path
     | 'file_picked'   // synthetic: extension host → webview with file content
-    | 'clear_display'; // synthetic: extension host → webview: clear chat UI
+    | 'clear_display'    // synthetic: extension host → webview: clear chat UI
+    | 'history_user'     // previous session user message replay
+    | 'history_agent';   // previous session agent message replay
 
   // ready
   provider?: string;
