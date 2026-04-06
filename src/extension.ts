@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 BitConcepts, LLC. All rights reserved.
 import * as vscode from 'vscode';
+import * as cp from 'child_process';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { SessionPanel, onSessionStatusChange } from './SessionPanel';
 import {
@@ -324,7 +326,66 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
   );
 
-  // ── Commands: Help ───────────────────────────────────────────────────────
+  // ── Commands: Install / Upgrade specsmith ───────────────────────────────────
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('specsmith.installOrUpgrade', async () => {
+      const cfg      = vscode.workspace.getConfiguration('specsmith');
+      const execPath = cfg.get<string>('executablePath', 'specsmith');
+
+      // Probe current version (try configured path + pipx bin fallback)
+      const version = _probeVersion(execPath);
+
+      const isInstalled = version !== null;
+      const items: vscode.QuickPickItem[] = isInstalled
+        ? [
+            { label: '$(arrow-up) Upgrade specsmith via pipx', description: `current: ${version}` },
+            { label: '$(arrow-up) Upgrade specsmith via pip', description: 'pip install --upgrade specsmith' },
+            { label: '$(info) Copy install path to clipboard', description: execPath },
+          ]
+        : [
+            { label: '$(cloud-download) Install via pipx (recommended)', description: 'pipx install specsmith[anthropic]' },
+            { label: '$(cloud-download) Install via pip',                 description: 'pip install specsmith[anthropic]' },
+          ];
+
+      const picked = await vscode.window.showQuickPick(items, {
+        placeHolder: isInstalled
+          ? `specsmith ${version} installed — upgrade?`
+          : 'specsmith not found — choose install method',
+      });
+      if (!picked) { return; }
+
+      if (picked.label.includes('clipboard')) {
+        await vscode.env.clipboard.writeText(execPath);
+        void vscode.window.showInformationMessage(`Copied: ${execPath}`);
+        return;
+      }
+
+      const term = vscode.window.createTerminal({ name: 'specsmith install', shellPath: _shellPath() });
+      term.show();
+
+      if (picked.label.includes('pipx') && isInstalled) {
+        term.sendText('pipx upgrade specsmith');
+      } else if (picked.label.includes('pipx')) {
+        term.sendText('pipx install "specsmith[anthropic]"');
+      } else {
+        const flag = isInstalled ? '--upgrade' : '--user';
+        term.sendText(`pip install ${flag} "specsmith[anthropic]"`);
+      }
+
+      void vscode.window.showInformationMessage(
+        'specsmith install/upgrade running in the terminal below. ' +
+        'Reload the window after it completes.',
+        'Reload Now',
+      ).then((a) => {
+        if (a === 'Reload Now') {
+          void vscode.commands.executeCommand('workbench.action.reloadWindow');
+        }
+      });
+    }),
+  );
+
+  // ── Commands: Help ──────────────────────────────────────────────
 
   context.subscriptions.push(
     vscode.commands.registerCommand('specsmith.showHelp', () => showHelp(context)),
@@ -345,7 +406,50 @@ export function activate(context: vscode.ExtensionContext): void {
 
 export function deactivate(): void { /* context.subscriptions handles cleanup */ }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// ── Helpers ────────────────────────────────────────────────────────────────
+
+/**
+ * Synchronously probe the specsmith executable. Tries the configured path
+ * first, then common pipx/pip bin locations. Returns the version string or
+ * null if specsmith cannot be found or executed.
+ */
+function _probeVersion(configured: string): string | null {
+  const candidates = [configured];
+
+  if (process.platform === 'win32') {
+    const local   = process.env.LOCALAPPDATA ?? path.join(os.homedir(), 'AppData', 'Local');
+    const roaming = process.env.APPDATA       ?? path.join(os.homedir(), 'AppData', 'Roaming');
+    candidates.push(
+      path.join(local,   'pipx', 'bin', 'specsmith.exe'),
+      path.join(local,   'pipx', 'bin', 'specsmith.bat'),
+      path.join(local,   'Programs', 'Python', 'Scripts', 'specsmith.exe'),
+      path.join(roaming, 'Python', 'Scripts', 'specsmith.exe'),
+    );
+  } else {
+    candidates.push(
+      path.join(os.homedir(), '.local', 'bin', 'specsmith'),
+      '/usr/local/bin/specsmith',
+    );
+  }
+
+  for (const c of candidates) {
+    try {
+      const result = cp.spawnSync(c, ['--version'], { timeout: 5000, encoding: 'utf8' });
+      if (result.status === 0) {
+        return (result.stdout ?? '').trim().split('\n')[0];
+      }
+    } catch { /* not found, try next */ }
+  }
+  return null;
+}
+
+/** Return the user's default shell path for a terminal. */
+function _shellPath(): string | undefined {
+  if (process.platform === 'win32') {
+    return process.env.ComSpec ?? 'powershell.exe';
+  }
+  return process.env.SHELL;
+}
 
 function _findReqFile(projectDir: string): string | undefined {
   const candidates = [

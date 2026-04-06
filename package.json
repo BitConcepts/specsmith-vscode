@@ -46,7 +46,8 @@
       { "command": "specsmith.addRequirement",        "title": "Quick Add Requirement",       "category": "specsmith", "icon": "$(add)" },
       { "command": "specsmith.navigateRequirements",  "title": "Navigate Requirements",       "category": "specsmith", "icon": "$(list-unordered)" },
       { "command": "specsmith.openScaffold",          "title": "Open Scaffolding File",       "category": "specsmith", "icon": "$(settings-gear)" },
-      { "command": "specsmith.showHelp",              "title": "Show Help",                   "category": "specsmith", "icon": "$(question)" }
+      { "command": "specsmith.showHelp",              "title": "Show Help",                   "category": "specsmith", "icon": "$(question)" },
+      { "command": "specsmith.installOrUpgrade",      "title": "Install or Upgrade specsmith", "category": "specsmith", "icon": "$(cloud-download)" }
     ],
     "menus": {
       "view/title": [

@@ -64,12 +64,18 @@ export class SessionPanel implements vscode.Disposable {
     const execPath = cfg.get<string>('executablePath', 'specsmith');
     const envOverrides = await ApiKeyManager.getAllEnv(context.secrets);
 
-    // Load saved provider/model for this project (overrides defaults)
+    // Load saved provider/model for this project.
+    // Only use the saved provider if its API key is still configured
+    // (prevents stale 'anthropic' overriding auto-detected 'openai' when keys change).
     const settingsKey = `specsmith.session.${projectDir}`;
     const saved = context.globalState.get<SavedSettings>(settingsKey);
     if (saved) {
-      provider = saved.provider;
-      model    = saved.model;
+      const savedKeyPresent = saved.provider === 'ollama'
+        || !!(await ApiKeyManager.getKey(context.secrets, saved.provider));
+      if (savedKeyPresent) {
+        provider = saved.provider;
+        model    = saved.model;
+      }
     }
 
     const config: SessionConfig = { projectDir, provider, model, sessionId: Date.now().toString() };

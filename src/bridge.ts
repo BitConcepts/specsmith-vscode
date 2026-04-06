@@ -10,8 +10,41 @@
  *                          tokens, turn_done, error, system
  */
 import * as cp from 'child_process';
+import * as os from 'os';
+import * as path from 'path';
 import * as readline from 'readline';
 import { SpecsmithEvent, SessionConfig, SessionStatus } from './types';
+
+/**
+ * Return an env object with known pipx/pip bin directories prepended to PATH.
+ * VS Code's Extension Host process may not inherit the user's full shell PATH,
+ * so specsmith (installed via pipx) won't be found without this augmentation.
+ */
+function augmentedEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const env = { ...base };
+  const extra: string[] = [];
+
+  if (process.platform === 'win32') {
+    const local = process.env.LOCALAPPDATA ?? path.join(os.homedir(), 'AppData', 'Local');
+    const roaming = process.env.APPDATA ?? path.join(os.homedir(), 'AppData', 'Roaming');
+    extra.push(
+      path.join(local,   'pipx', 'bin'),                    // pipx default on Windows
+      path.join(local,   'Programs', 'Python', 'Scripts'),  // pip user (Python 3.11+)
+      path.join(roaming, 'Python', 'Scripts'),              // pip user (older Python)
+      path.join(os.homedir(), '.local', 'bin'),             // alternate pipx location
+    );
+  } else {
+    // macOS / Linux
+    extra.push(
+      path.join(os.homedir(), '.local', 'bin'),
+      '/usr/local/bin',
+    );
+  }
+
+  const current = env.PATH ?? '';
+  env.PATH = [...extra, current].join(path.delimiter);
+  return env;
+}
 
 const TURN_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes per turn
 
@@ -122,7 +155,7 @@ export class SpecsmithBridge {
     if (this._config.provider) { args.push('--provider', this._config.provider); }
     if (this._config.model)    { args.push('--model',    this._config.model);    }
 
-    const env = { ...process.env, ...this._envOverrides } as NodeJS.ProcessEnv;
+    const env = augmentedEnv({ ...process.env, ...this._envOverrides });
 
     // Warn if specsmith hasn't emitted 'ready' within 20 seconds
     this._startupTimer = setTimeout(() => {
@@ -130,10 +163,12 @@ export class SpecsmithBridge {
         this._emit({
           type: 'error',
           message:
-            'specsmith hasn\'t started after 20s. Possible causes:\n' +
-            '  1. specsmith not on PATH — set executablePath in settings\n' +
-            '  2. No API key set — run: specsmith: Set API Key\n' +
-            '  3. specsmith not installed — pip install specsmith[anthropic]',
+            `specsmith not responding (tried: "${this._execPath}")\n` +
+            'To fix:\n' +
+            '  • Ctrl+Shift+P → specsmith: Install or Upgrade\n' +
+            '  • Or set specsmith.executablePath in VS Code settings\n' +
+            '  • On Windows / pipx the exe is usually:\n' +
+            '    %LOCALAPPDATA%\\pipx\\bin\\specsmith.exe',
         });
         this._setStatus('error');
       }
