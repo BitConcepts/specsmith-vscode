@@ -83,7 +83,8 @@ export interface WebviewMessage {
     | 'openFile'
     | 'clearHistory'   // webview → host: clear files + agent context + display
     | 'copyAll'        // webview → host: (handled entirely client-side, no-op here)
-    | 'downloadModel'; // webview → host: user selected a dl: prefixed model
+    | 'downloadModel' // webview → host: user selected a dl: prefixed model
+    | 'showHelp';     // webview → host: open help panel
   text?: string;
   provider?: string;
   model?: string;

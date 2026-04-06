@@ -59,12 +59,14 @@
         { "command": "specsmith.newSession",      "when": "view == specsmith.sessions",  "group": "navigation" },
       { "command": "specsmith.showHelp",        "when": "view == specsmith.sessions",  "group": "navigation" },
         { "command": "specsmith.showGovernance", "when": "view == specsmith.sessions",  "group": "navigation" },
+        { "command": "specsmith.showGovernance", "when": "view == specsmith.projects",  "group": "navigation" },
         { "command": "specsmith.openProject",     "when": "view == specsmith.projects",  "group": "navigation" },
         { "command": "specsmith.createProject",   "when": "view == specsmith.projects",  "group": "navigation" },
         { "command": "specsmith.importProject",   "when": "view == specsmith.projects",  "group": "navigation" },
         { "command": "specsmith.refreshProjects", "when": "view == specsmith.projects",  "group": "navigation" }
       ],
       "view/item/context": [
+        { "command": "specsmith.showGovernance",         "when": "view == specsmith.projects && viewItem == project",    "group": "inline" },
         { "command": "specsmith.newSessionFromProject", "when": "view == specsmith.projects && viewItem == project",    "group": "inline" },
         { "command": "specsmith.removeProject",         "when": "view == specsmith.projects && viewItem == project",    "group": "1_project" },
         { "command": "specsmith.deleteSession",         "when": "view == specsmith.sessions && viewItem == session",    "group": "inline" },

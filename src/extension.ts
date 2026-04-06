@@ -216,9 +216,9 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
   );
 
-  // Startup: fetch models in background for all configured providers
-  // so dropdowns are populated before the user opens their first session
+  // Startup: fetch models + check for specsmith update
   void _startupFetchModels(context);
+  void _checkForSpecsmithUpdate(context);
 
   // ── Commands: specsmith tools ────────────────────────────────────────────
 
@@ -628,6 +628,45 @@ async function _verifyAndBroadcast(context: vscode.ExtensionContext): Promise<vo
       );
     }
   }
+}
+
+/** Check if a newer specsmith is available (once per day). Prompt to upgrade if so. */
+async function _checkForSpecsmithUpdate(context: vscode.ExtensionContext): Promise<void> {
+  const DAILY_MS = 24 * 60 * 60 * 1000;
+  const lastCheck = context.globalState.get<number>('specsmith.lastUpdateCheck', 0);
+  if (Date.now() - lastCheck < DAILY_MS) { return; }
+  await context.globalState.update('specsmith.lastUpdateCheck', Date.now());
+
+  await new Promise((r) => setTimeout(r, 5000)); // wait for startup
+  try {
+    const cfg      = vscode.workspace.getConfiguration('specsmith');
+    const execPath = cfg.get<string>('executablePath', 'specsmith');
+    const current  = _probeVersion(execPath);
+    if (!current) { return; } // specsmith not installed
+
+    // Fetch latest from PyPI
+    const https = await import('https');
+    const res = await new Promise<string>((resolve, reject) => {
+      const req = https.get(
+        'https://pypi.org/pypi/specsmith/json',
+        { timeout: 8000 },
+        (r) => { let d = ''; r.on('data', (c: Buffer) => { d += c; }); r.on('end', () => resolve(d)); },
+      );
+      req.on('error', reject);
+    });
+    const pypiData = JSON.parse(res) as { info?: { version?: string } };
+    const latest   = pypiData.info?.version;
+    if (!latest || latest === current.split(/\s/)[2]) { return; }
+
+    const ans = await vscode.window.showInformationMessage(
+      `specsmith update available: v${latest} (installed: ${current})`,
+      'Upgrade Now',
+      'Later',
+    );
+    if (ans === 'Upgrade Now') {
+      void vscode.commands.executeCommand('specsmith.installOrUpgrade');
+    }
+  } catch { /* silent — don't crash startup */ }
 }
 
 /** Silently warm the model cache at extension startup for all configured providers. */

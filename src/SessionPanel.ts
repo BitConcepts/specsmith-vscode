@@ -106,6 +106,15 @@ export class SessionPanel implements vscode.Disposable {
       if (savedKeyPresent) {
         provider = saved.provider;
         model    = saved.model;
+        // For Ollama: validate the saved model is actually installed
+        // (prevents stale 'o4-mini' or other cloud model names causing 404)
+        if (saved.provider === 'ollama' && saved.model) {
+          const { OllamaManager: _OM } = await import('./OllamaManager');
+          const installed = await _OM.getInstalledIds();
+          if (!installed.some((id) => id === saved.model || id.startsWith(saved.model.split(':')[0]))) {
+            model = ''; // reset — auto-detect will pick the right installed model below
+          }
+        }
       }
     }
 
@@ -156,6 +165,10 @@ export class SessionPanel implements vscode.Disposable {
         this._appendChat({ role: 'tool', text: e.result ?? '', name: e.name, ts });
       } else if (e.type === 'error' && e.message) {
         this._appendChat({ role: 'error', text: e.message, ts });
+      }
+      // Auto-run start protocol when agent becomes ready
+      if (e.type === 'ready') {
+        setTimeout(() => this._bridge.send('start'), 300);
       }
       void this._panel.webview.postMessage(e);
     });
@@ -369,9 +382,11 @@ export class SessionPanel implements vscode.Disposable {
       case 'copyAll': break; // handled entirely in webview JS
 
       case 'downloadModel':
-        // Delegate to extension.ts via a fired command so the download
-        // progress notification runs at the extension host level
         void vscode.commands.executeCommand('specsmith.downloadModel', msg.model ?? '');
+        break;
+
+      case 'showHelp':
+        void vscode.commands.executeCommand('specsmith.showHelp');
         break;
     }
   }
@@ -551,7 +566,7 @@ export class SessionPanel implements vscode.Disposable {
   <button class="hbtn" title="Copy all messages" onclick="copyAll()" id="cab">⎘</button>
   <button class="hbtn" title="Clear chat history" onclick="doClearHistory()">🗑</button>
   <button class="hbtn" title="Export chat as markdown" onclick="exportChat()">⬇</button>
-  <button class="hbtn" title="Help" onclick="vscode.postMessage({command:'openFile',filePath:''})">❓</button>
+  <button class="hbtn" title="Help (keyboard shortcuts, commands, usage)" onclick="vscode.postMessage({command:'showHelp'})">\u2753</button>
 </div>
 <div id="chat"></div>
 <div id="rh" title="Drag · Dbl-click collapse"></div>
