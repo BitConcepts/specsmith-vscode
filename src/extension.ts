@@ -392,6 +392,31 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
   );
 
+  // ── Commands: Chat history ──────────────────────────────────────────
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('specsmith.clearHistory', () => {
+      const s = SessionPanel.current();
+      if (s) { s.clearHistoryExternal(); }
+      else { void vscode.window.showInformationMessage('specsmith: no active session.'); }
+    }),
+    vscode.commands.registerCommand('specsmith.clearAllHistory', async () => {
+      const sessions = SessionPanel.all();
+      if (!sessions.length) {
+        void vscode.window.showInformationMessage('specsmith: no open sessions.');
+        return;
+      }
+      const ans = await vscode.window.showWarningMessage(
+        `Clear display and history files for all ${sessions.length} open session(s)?`,
+        { modal: true }, 'Clear All',
+      );
+      if (ans === 'Clear All') {
+        for (const s of sessions) { s.clearHistoryExternal(); }
+        void vscode.window.showInformationMessage(`${sessions.length} session(s) cleared.`);
+      }
+    }),
+  );
+
   // ── Commands: Help ──────────────────────────────────────────────
 
   context.subscriptions.push(

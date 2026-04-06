@@ -171,6 +171,33 @@ export class SessionPanel implements vscode.Disposable {
     }
   }
 
+  /** Clear display + agent context + JSONL files (called from command palette). */
+  clearHistoryExternal(): void {
+    this._doClearHistory();
+  }
+
+  private _doClearHistory(): void {
+    // Delete all JSONL history files for this project
+    try {
+      const chatDir = path.join(this._config.projectDir, CHAT_DIR);
+      if (fs.existsSync(chatDir)) {
+        for (const f of fs.readdirSync(chatDir)) {
+          if (f.endsWith('.jsonl')) { fs.unlinkSync(path.join(chatDir, f)); }
+        }
+      }
+    } catch { /* ignore */ }
+    // Start a fresh file
+    this._chatStream?.end();
+    this._initChatHistory();
+    // Clear agent LLM context
+    this._bridge.send('/clear');
+    // Clear webview display
+    void this._panel.webview.postMessage({
+      type: 'clear_display',
+      message: 'History cleared — new session started.',
+    } satisfies SpecsmithEvent);
+  }
+
   dispose(): void {
     SessionPanel._instances = SessionPanel._instances.filter((i) => i !== this);
     if (SessionPanel._current === this) {
@@ -297,6 +324,12 @@ export class SessionPanel implements vscode.Disposable {
       case 'openFile':
         if (msg.filePath) { void vscode.window.showTextDocument(vscode.Uri.file(msg.filePath)); }
         break;
+
+      case 'clearHistory':
+        this._doClearHistory();
+        break;
+
+      case 'copyAll': break; // handled entirely in webview JS
     }
   }
 
@@ -461,7 +494,9 @@ export class SessionPanel implements vscode.Disposable {
   <select id="ms" style="min-width:148px"></select>
   <span id="mdesc" title=""></span>
   <span style="flex:1"></span>
-  <button class="hbtn" title="Export chat" onclick="exportChat()">⬇</button>
+  <button class="hbtn" title="Copy all messages" onclick="copyAll()" id="cab">⎘</button>
+  <button class="hbtn" title="Clear chat history" onclick="doClearHistory()">🗑</button>
+  <button class="hbtn" title="Export chat as markdown" onclick="exportChat()">⬇</button>
   <button class="hbtn" title="Help" onclick="vscode.postMessage({command:'openFile',filePath:''})">❓</button>
 </div>
 <div id="chat"></div>
@@ -589,6 +624,21 @@ function exportChat(){const ms=[];C.querySelectorAll('[data-raw]').forEach(el=>{
   const md='# specsmith Chat\\n'+new Date().toISOString()+'\\n\\n'+ms.join('\\n\\n---\\n\\n');
   vscode.postMessage({command:'exportChat',markdown:md})}
 function pf(){vscode.postMessage({command:'pickFile'})}
+function copyAll(){
+  const ms=[];C.querySelectorAll('[data-raw]').forEach(el=>{
+    const u=el.classList.contains('mu');
+    ms.push((u?'**You ('+el.querySelector('.mt')?.textContent+'):** ':'**Agent:** ')+(el.dataset.raw||''))});
+  const txt=ms.join('\\n\\n---\\n\\n');
+  navigator.clipboard.writeText(txt).then(()=>{
+    const b=document.getElementById('cab');if(!b)return;
+    const prev=b.textContent;b.textContent='✓';
+    setTimeout(()=>b.textContent=prev,1200);
+  }).catch(()=>{});
+}
+function doClearHistory(){
+  if(busy&&!confirm('Agent is running. Clear anyway?'))return;
+  vscode.postMessage({command:'clearHistory'});
+}
 document.getElementById('it').addEventListener('keydown',e=>{
   /* Enter alone = send; Ctrl+Enter or Shift+Enter = insert newline (default) */
   if(e.key==='Enter'&&!e.shiftKey&&!e.ctrlKey&&!e.metaKey&&!e.altKey){e.preventDefault();snd();return}
@@ -684,6 +734,13 @@ window.addEventListener('message',({data})=>{switch(data.type){
   case 'turn_done':setBusy(false);break;
   case 'error':addE(data.message);setBusy(false);break;
   case 'system':addS(data.message||'');break;
+  case 'clear_display':
+    C.innerHTML='';
+    warned=false;
+    document.getElementById('obn').classList.remove('show');
+    addS(data.message||'Chat cleared.');
+    setBusy(false);
+    break;
   case 'file_picked':if(data.isImage&&data.dataUrl){addImg(data.dataUrl,data.fileName||'img');const i=document.getElementById('it');i.value=\`[Image: \${data.fileName}]\\n\${i.value}\`}
     else if(data.fileContent!==undefined){const i=document.getElementById('it');const p=data.fileContent.length>8000?data.fileContent.slice(0,8000)+'\\n…':data.fileContent;i.value=\`[File: \${data.fileName}]\\n\\\`\\\`\\\`\\n\${p}\\n\\\`\\\`\\\`\\n\\n\${i.value}\`;i.focus()}break;
 }});
