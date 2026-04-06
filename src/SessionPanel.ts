@@ -255,7 +255,7 @@ export class SessionPanel implements vscode.Disposable {
   #mdesc{font-size:10px;color:var(--dim);max-width:160px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .hbtn{background:none;border:none;color:var(--dim);cursor:pointer;font-size:13px;padding:0 3px}
   .hbtn:hover{color:var(--teal)}
-  #chat{flex:1 1 auto;overflow-y:auto;padding:10px 12px;display:flex;flex-direction:column;gap:5px;min-height:80px}
+  #chat{flex:1 1 auto;overflow-y:auto;padding:10px 12px;display:flex;flex-direction:column;gap:5px;min-height:140px}
   #chat::-webkit-scrollbar{width:5px}
   #chat::-webkit-scrollbar-thumb{background:var(--br);border-radius:3px}
   #rh{height:5px;background:var(--br);cursor:ns-resize;flex-shrink:0;transition:background .15s}
@@ -297,12 +297,10 @@ export class SessionPanel implements vscode.Disposable {
   #it{flex:1;background:var(--ib);color:var(--if);border:1px solid var(--br);border-radius:5px;padding:6px 9px;font-family:var(--fn);font-size:13px;resize:none;min-height:38px;max-height:110px;line-height:1.4}
   #it:focus{outline:1px solid var(--teal);border-color:var(--teal)}
   #it:disabled{opacity:.5}
-  #sb{background:var(--bb);color:var(--bf);border:none;border-radius:5px;padding:6px 12px;cursor:pointer;font-size:12px;font-weight:600;white-space:nowrap;height:38px}
-  #sb:hover:not(:disabled){background:var(--bh)}
-  #sb:disabled{opacity:.45;cursor:not-allowed}
-  #stpb{background:var(--red);color:#fff;border:none;border-radius:5px;padding:6px 10px;cursor:pointer;font-size:12px;font-weight:600;height:38px;display:none}
-  #stpb:hover{opacity:.85}
-  #stpb.show{display:block}
+  #mainbtn{width:40px;height:40px;border:none;border-radius:50%;background:var(--bb);color:var(--bf);cursor:pointer;font-size:18px;font-weight:700;flex-shrink:0;transition:background .15s,transform .1s;align-self:flex-end}
+  #mainbtn:hover:not(:disabled){background:var(--bh);transform:scale(1.07)}
+  #mainbtn:disabled{opacity:.45;cursor:not-allowed}
+  #mainbtn.busy{background:var(--red)!important}
   #tr{display:flex;gap:4px;flex-wrap:wrap;align-items:center}
   .tb2{background:none;border:1px solid var(--br);border-radius:3px;color:var(--dim);padding:1px 6px;cursor:pointer;font-size:10px;font-family:var(--fn);transition:border-color .15s,color .15s}
   .tb2:hover:not(:disabled){border-color:var(--teal);color:var(--teal)}
@@ -351,8 +349,7 @@ export class SessionPanel implements vscode.Disposable {
     <span>Agent thinking…</span></div>
   <div id="ir">
     <textarea id="it" rows="2" placeholder="Message AEE agent… (Ctrl+Enter · @ file · drag/drop)"></textarea>
-    <button id="sb" onclick="snd()">Send ↵</button>
-    <button id="stpb" onclick="stp()">◼ Stop</button>
+    <button id="mainbtn" title="Send (Ctrl+Enter)" onclick="mainAct()">↑</button>
   </div>
   <div id="tr">
     <button class="tb2" onclick="q('audit')">🔍 audit</button>
@@ -413,8 +410,12 @@ function updTok(i,o,c){const t=i+o,sz=csize(curMdl),p=Math.min(100,Math.round(t/
   document.getElementById('tcst').textContent='$'+Number(c||0).toFixed(4);
   if(p>=70&&!warned){warned=true;document.getElementById('obn').classList.add('show');
     document.getElementById('obt').textContent=\`Context \${p}% — /clear or Audit/Compress\`}}
-function setBusy(v){busy=v;document.getElementById('sb').disabled=v;document.getElementById('it').disabled=v;
-  document.getElementById('typ').className=v?'show':'';document.getElementById('stpb').className=v?'show':'';
+function mainAct(){if(busy)stp();else snd()}
+function setBusy(v){busy=v;document.getElementById('it').disabled=v;
+  document.getElementById('typ').className=v?'show':'';
+  const b=document.getElementById('mainbtn');
+  b.textContent=v?'◼':'↑';b.title=v?'Stop agent (click or Esc)':'Send (Ctrl+Enter)';
+  if(v)b.classList.add('busy');else b.classList.remove('busy');
   document.querySelectorAll('.tb2').forEach(b=>b.disabled=v)}
 function snd(){if(busy)return;const i=document.getElementById('it'),t=i.value.trim();if(!t)return;
   i.value='';addU(t);setBusy(true);vscode.postMessage({command:'send',text:t})}
@@ -430,6 +431,7 @@ function exportChat(){const ms=[];C.querySelectorAll('[data-raw]').forEach(el=>{
 function pf(){vscode.postMessage({command:'pickFile'})}
 document.getElementById('it').addEventListener('keydown',e=>{
   if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){e.preventDefault();snd();return}
+  if(e.key==='Escape'&&busy){e.preventDefault();stp();return}
   if(e.key==='ArrowUp'&&!e.target.value.trim()){e.preventDefault();e.target.value=lastU;e.target.setSelectionRange(lastU.length,lastU.length)}
   if(e.key==='@'&&!e.target.value.trim()){e.preventDefault();pf()}})
 function popMdl(prov,mdls,sel){const s=document.getElementById('ms');const pr=s.value;s.innerHTML='';
@@ -457,15 +459,15 @@ function inj(file){const im=file.type.startsWith('image/'),tx=file.type.startsWi
 /* Resize handle */
 (()=>{const h=document.getElementById('rh'),ce=document.getElementById('chat');let dr=false,sy=0,sh=0,col=false,sv=0;
   h.addEventListener('mousedown',e=>{dr=true;sy=e.clientY;sh=ce.getBoundingClientRect().height;h.classList.add('drag');e.preventDefault()});
-  document.addEventListener('mousemove',e=>{if(!dr)return;const d=e.clientY-sy,nh=Math.max(80,sh+d);ce.style.flex='none';ce.style.height=nh+'px'});
+  document.addEventListener('mousemove',e=>{if(!dr)return;const d=e.clientY-sy,nh=Math.max(140,sh+d);ce.style.flex='none';ce.style.height=nh+'px'});
   document.addEventListener('mouseup',()=>{dr=false;h.classList.remove('drag')});
-  h.addEventListener('dblclick',()=>{if(col){ce.style.height=sv+'px';col=false}else{sv=ce.getBoundingClientRect().height;ce.style.flex='none';ce.style.height='80px';col=true}})})();
+  h.addEventListener('dblclick',()=>{if(col){ce.style.height=sv+'px';col=false}else{sv=ce.getBoundingClientRect().height;ce.style.flex='none';ce.style.height='140px';col=true}})})();
 /* Messages from host */
 window.addEventListener('message',({data})=>{switch(data.type){
   case 'init':if(data.provider){document.getElementById('ps').value=data.provider;popMdl(data.provider,data.models||[],data.model)}
     if(data.projectDir){const l=document.getElementById('dlbl');l.textContent=data.projectDir.split(/[\\\\/]/).pop()||data.projectDir;l.title=data.projectDir}break;
   case 'models':popMdl(document.getElementById('ps').value,data.models,curMdl);break;
-  case 'ready':addS(\`AEE Agent ready — \${data.provider||''}/\${data.model||''} (\${data.tools||0} tools)\`);
+  case 'ready':setBusy(false);addS(\`AEE Agent ready — \${data.provider||''}/\${data.model||''} (\${data.tools||0} tools)\`);
     if(data.project_dir){const l=document.getElementById('dlbl');l.textContent=data.project_dir.split(/[\\\\/]/).pop();l.title=data.project_dir}break;
   case 'llm_chunk':addA(data.text||'');break;
   case 'tool_started':addS('  ⚙ '+(data.name||'?')+'…');break;

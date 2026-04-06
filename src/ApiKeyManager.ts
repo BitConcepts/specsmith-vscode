@@ -121,6 +121,24 @@ export class ApiKeyManager {
   }
 
   /**
+   * Return the provider id to use for new sessions.
+   * If exactly one API key is configured, returns that provider automatically.
+   * Otherwise returns the supplied fallback (the user's defaultProvider setting).
+   */
+  static async getDefaultProvider(
+    secrets: vscode.SecretStorage,
+    fallback: string,
+  ): Promise<{ provider: string; hasKeys: boolean }> {
+    const configured: string[] = [];
+    for (const p of PROVIDERS) {
+      const key = await secrets.get(p.secretKey);
+      if (key) { configured.push(p.id); }
+    }
+    const provider = configured.length === 1 ? configured[0] : fallback;
+    return { provider, hasKeys: configured.length > 0 };
+  }
+
+  /**
    * Show a status notification listing which providers have keys configured.
    */
   static async showStatus(secrets: vscode.SecretStorage): Promise<void> {

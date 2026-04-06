@@ -23,6 +23,7 @@ export class SpecsmithBridge {
   private _ready = false;
   private _pending: string[] = [];
   private _turnTimer: ReturnType<typeof setTimeout> | undefined;
+  private _startupTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly _execPath: string;
   private _config: SessionConfig;
   private _envOverrides: Record<string, string>;
@@ -69,6 +70,7 @@ export class SpecsmithBridge {
   public dispose(): void {
     this._ready = false;
     this._clearTurnTimer();
+    this._clearStartupTimer();
     this._rl?.close();
     this._rl = null;
     if (this._proc) {
@@ -122,6 +124,21 @@ export class SpecsmithBridge {
 
     const env = { ...process.env, ...this._envOverrides } as NodeJS.ProcessEnv;
 
+    // Warn if specsmith hasn't emitted 'ready' within 20 seconds
+    this._startupTimer = setTimeout(() => {
+      if (!this._ready) {
+        this._emit({
+          type: 'error',
+          message:
+            'specsmith hasn\'t started after 20s. Possible causes:\n' +
+            '  1. specsmith not on PATH — set executablePath in settings\n' +
+            '  2. No API key set — run: specsmith: Set API Key\n' +
+            '  3. specsmith not installed — pip install specsmith[anthropic]',
+        });
+        this._setStatus('error');
+      }
+    }, 20_000);
+
     this._proc = cp.spawn(this._execPath, args, {
       cwd: this._config.projectDir,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -136,6 +153,7 @@ export class SpecsmithBridge {
         const event = JSON.parse(trimmed) as SpecsmithEvent;
         if (event.type === 'ready') {
           this._ready = true;
+          this._clearStartupTimer();
           this._setStatus('waiting');
           while (this._pending.length > 0) {
             this._writeLine(this._pending.shift()!);
@@ -206,6 +224,13 @@ export class SpecsmithBridge {
     if (this._turnTimer !== undefined) {
       clearTimeout(this._turnTimer);
       this._turnTimer = undefined;
+    }
+  }
+
+  private _clearStartupTimer(): void {
+    if (this._startupTimer !== undefined) {
+      clearTimeout(this._startupTimer);
+      this._startupTimer = undefined;
     }
   }
 }

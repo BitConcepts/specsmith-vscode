@@ -58,7 +58,21 @@ export function activate(context: vscode.ExtensionContext): void {
 
   async function openSession(projectDir: string): Promise<void> {
     const d = defaults();
-    const session = await SessionPanel.create(context, projectDir, d.provider, d.model);
+    // Auto-select provider: if only 1 API key is set, use it; otherwise use setting
+    const { provider, hasKeys } = await ApiKeyManager.getDefaultProvider(context.secrets, d.provider);
+
+    if (!hasKeys) {
+      const action = await vscode.window.showWarningMessage(
+        'specsmith: No API keys configured. The agent won\'t be able to call any LLM.',
+        'Set API Key Now',
+        'Continue Anyway',
+      );
+      if (action === 'Set API Key Now') {
+        await ApiKeyManager.promptSetKey(context.secrets);
+      }
+    }
+
+    const session = await SessionPanel.create(context, projectDir, provider, d.model);
     sessionTree.refresh();
     fileTree.setRoot(session.projectDir);
     projectTree.addProject(projectDir);
