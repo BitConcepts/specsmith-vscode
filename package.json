@@ -47,6 +47,7 @@
       { "command": "specsmith.navigateRequirements",  "title": "Navigate Requirements",       "category": "specsmith", "icon": "$(list-unordered)" },
       { "command": "specsmith.openScaffold",          "title": "Open Scaffolding File",       "category": "specsmith", "icon": "$(settings-gear)" },
       { "command": "specsmith.showHelp",              "title": "Show Help",                   "category": "specsmith", "icon": "$(question)" },
+      { "command": "specsmith.showGovernance",        "title": "Open Governance Panel",        "category": "specsmith", "icon": "$(book)" },
       { "command": "specsmith.installOrUpgrade",      "title": "Install or Upgrade specsmith", "category": "specsmith", "icon": "$(cloud-download)" },
       { "command": "specsmith.clearHistory",          "title": "Clear Chat History (current session)",   "category": "specsmith", "icon": "$(clear-all)" },
       { "command": "specsmith.clearAllHistory",       "title": "Clear Chat History (all sessions)",      "category": "specsmith", "icon": "$(clear-all)" },
@@ -56,7 +57,8 @@
     "menus": {
       "view/title": [
         { "command": "specsmith.newSession",      "when": "view == specsmith.sessions",  "group": "navigation" },
-        { "command": "specsmith.showHelp",        "when": "view == specsmith.sessions",  "group": "navigation" },
+      { "command": "specsmith.showHelp",        "when": "view == specsmith.sessions",  "group": "navigation" },
+        { "command": "specsmith.showGovernance", "when": "view == specsmith.sessions",  "group": "navigation" },
         { "command": "specsmith.openProject",     "when": "view == specsmith.projects",  "group": "navigation" },
         { "command": "specsmith.createProject",   "when": "view == specsmith.projects",  "group": "navigation" },
         { "command": "specsmith.importProject",   "when": "view == specsmith.projects",  "group": "navigation" },
@@ -76,6 +78,7 @@
     },
     "keybindings": [
       { "command": "specsmith.newSession",           "key": "ctrl+shift+;",  "mac": "cmd+shift+;" },
+      { "command": "specsmith.showGovernance",       "key": "ctrl+shift+g",  "mac": "cmd+shift+g" },
       { "command": "specsmith.addRequirement",       "key": "ctrl+shift+r",  "mac": "cmd+shift+r" },
       { "command": "specsmith.navigateRequirements", "key": "ctrl+shift+q",  "mac": "cmd+shift+q" },
       { "command": "specsmith.showHelp",             "key": "ctrl+shift+h",  "mac": "cmd+shift+h", "when": "activeWebviewPanelId == 'specsmithSession'" }

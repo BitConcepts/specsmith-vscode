@@ -72,6 +72,15 @@ export class OllamaManager {
 
   // ── Installed models ────────────────────────────────────────────────────
 
+  /**
+   * Return the ID of the first installed model, or null if none.
+   * Used to auto-select a valid model when no saved setting exists.
+   */
+  static async getFirstInstalledModel(): Promise<string | null> {
+    const ids = await OllamaManager.getInstalledIds();
+    return ids.length > 0 ? ids[0] : null;
+  }
+
   /** Return just the IDs of installed models (e.g. ['qwen2.5:14b']). */
   static async getInstalledIds(): Promise<string[]> {
     return new Promise((resolve) => {

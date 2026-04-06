@@ -13,6 +13,7 @@ import {
 import { EpistemicBar } from './EpistemicBar';
 import { ApiKeyManager } from './ApiKeyManager';
 import { showHelp } from './HelpPanel';
+import { showGovernancePanel } from './GovernancePanel';
 import { fetchModels } from './ModelRegistry';
 import { OllamaManager, TASK_SUGGESTIONS } from './OllamaManager';
 import { SessionStatus } from './types';
@@ -511,6 +512,25 @@ export function activate(context: vscode.ExtensionContext): void {
         // Trigger download
         void vscode.commands.executeCommand('specsmith.downloadModel', selected.id);
       }
+    }),
+  );
+
+  // ── Commands: Governance panel ─────────────────────────────────────
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('specsmith.showGovernance', () => {
+      const session    = SessionPanel.current();
+      const projectDir = session?.projectDir
+        ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      if (!projectDir) {
+        void vscode.window.showWarningMessage('specsmith: open a session or workspace first.');
+        return;
+      }
+      showGovernancePanel(
+        context,
+        projectDir,
+        (text) => session?.sendCommand(text) ?? void vscode.window.showWarningMessage('Open a session first to use AI prompts.'),
+      );
     }),
   );
 

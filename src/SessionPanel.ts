@@ -65,6 +65,19 @@ export class SessionPanel implements vscode.Disposable {
     const execPath = cfg.get<string>('executablePath', 'specsmith');
     const envOverrides = await ApiKeyManager.getAllEnv(context.secrets);
 
+    // For Ollama: auto-select first installed model if none explicitly saved/chosen
+    if (provider === 'ollama' && !model) {
+      const { OllamaManager: OM } = await import('./OllamaManager');
+      const firstModel = await OM.getFirstInstalledModel();
+      if (firstModel) {
+        model = firstModel;
+      } else {
+        void vscode.window.showWarningMessage(
+          'No Ollama models installed. Use the model dropdown to download one, or run: specsmith ollama pull <model>',
+        );
+      }
+    }
+
     // Determine Ollama context length (VRAM-aware, or from setting)
     let ollamaCtx = 0;
     if (provider === 'ollama') {
@@ -616,6 +629,8 @@ const ERR_MAP=[
   [/Provider error.*401/i,                 'Wrong API key (401) — Ctrl+Shift+P → specsmith: Set API Key'],
   [/ECONNREFUSED|connection refused/i,      'Ollama not running — start it: run ollama serve or open the Ollama app'],
   [/404.*model|model.*not found/i,          'Model not downloaded — Ctrl+Shift+P → specsmith: Download Ollama Model'],
+  [/Ollama model not found/i,               'Ollama model not installed — select a model from the dropdown or use: specsmith ollama pull <model>'],
+  [/HTTP Error 404/i,                       'Ollama 404 — model not installed. Pick an installed model from the dropdown (Installed group)'],
   [/failed to load model/i,                 'Model failed to load — may need more VRAM or a smaller model'],
   [/insufficient_quota|exceeded.*quota/i,  'OpenAI quota exceeded — add credits at platform.openai.com/settings/billing'],
   [/Provider error.*429/i,                 'Rate limit (429) — quota exceeded, add billing credits or wait and retry'],
