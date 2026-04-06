@@ -1,0 +1,27 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "type": "npm",
+      "script": "build",
+      "group": "build",
+      "label": "npm: build",
+      "detail": "node esbuild.mjs",
+      "presentation": {
+        "reveal": "silent"
+      }
+    },
+    {
+      "type": "npm",
+      "script": "watch",
+      "group": "build",
+      "label": "npm: watch",
+      "detail": "node esbuild.mjs --watch",
+      "isBackground": true,
+      "presentation": {
+        "reveal": "never"
+      },
+      "problemMatcher": "$tsc-watch"
+    }
+  ]
+}
