@@ -8,6 +8,20 @@ import { SpecsmithEvent, WebviewMessage, SessionConfig, SessionStatus } from './
 import { ApiKeyManager } from './ApiKeyManager';
 import { fetchModels, getStaticModels } from './ModelRegistry';
 
+/** Per-project saved session settings. */
+interface SavedSettings { provider: string; model: string; }
+
+/** One chat history entry saved to disk. */
+interface ChatEntry {
+  role: 'user' | 'agent' | 'tool' | 'system' | 'error';
+  text: string;
+  name?: string;  // for tool entries
+  ts: string;
+}
+
+const CHAT_DIR = '.specsmith/chat';
+const MAX_CHAT_DISPLAY = 200; // max entries to replay on re-open
+
 // ── Static status listener registry ──────────────────────────────────────────
 type StatusListener = (panel: SessionPanel, status: SessionStatus) => void;
 const _statusListeners: StatusListener[] = [];
@@ -34,6 +48,9 @@ export class SessionPanel implements vscode.Disposable {
   private _status: SessionStatus = 'starting';
   private _disposables: vscode.Disposable[] = [];
   private readonly _secrets: vscode.SecretStorage;
+  private readonly _globalState: vscode.Memento;
+  private _chatFile: string | undefined;
+  private _chatStream: fs.WriteStream | undefined;
 
   // ── Factory (async — awaits SecretStorage for API keys) ───────────────────
 
@@ -47,6 +64,14 @@ export class SessionPanel implements vscode.Disposable {
     const execPath = cfg.get<string>('executablePath', 'specsmith');
     const envOverrides = await ApiKeyManager.getAllEnv(context.secrets);
 
+    // Load saved provider/model for this project (overrides defaults)
+    const settingsKey = `specsmith.session.${projectDir}`;
+    const saved = context.globalState.get<SavedSettings>(settingsKey);
+    if (saved) {
+      provider = saved.provider;
+      model    = saved.model;
+    }
+
     const config: SessionConfig = { projectDir, provider, model, sessionId: Date.now().toString() };
     const panel = vscode.window.createWebviewPanel(
       'specsmithSession',
@@ -55,7 +80,7 @@ export class SessionPanel implements vscode.Disposable {
       { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [] },
     );
 
-    const inst = new SessionPanel(panel, config, execPath, envOverrides, context.secrets);
+    const inst = new SessionPanel(panel, config, execPath, envOverrides, context.secrets, context.globalState);
     SessionPanel._instances.push(inst);
     SessionPanel._current = inst;
     return inst;
@@ -72,15 +97,29 @@ export class SessionPanel implements vscode.Disposable {
     execPath: string,
     envOverrides: Record<string, string>,
     secrets: vscode.SecretStorage,
+    globalState: vscode.Memento,
   ) {
-    this._panel   = panel;
-    this._config  = config;
-    this._secrets = secrets;
+    this._panel       = panel;
+    this._config      = config;
+    this._secrets     = secrets;
+    this._globalState = globalState;
+    this._initChatHistory();
     this._bridge  = new SpecsmithBridge(execPath, config, envOverrides);
 
     this._panel.webview.html = this._html();
 
-    this._bridge.onEvent((e: SpecsmithEvent) => { void this._panel.webview.postMessage(e); });
+    this._bridge.onEvent((e: SpecsmithEvent) => {
+      // Log display-only chat history to disk
+      const ts = new Date().toISOString();
+      if (e.type === 'llm_chunk' && e.text) {
+        this._appendChat({ role: 'agent', text: e.text, ts });
+      } else if (e.type === 'tool_finished') {
+        this._appendChat({ role: 'tool', text: e.result ?? '', name: e.name, ts });
+      } else if (e.type === 'error' && e.message) {
+        this._appendChat({ role: 'error', text: e.message, ts });
+      }
+      void this._panel.webview.postMessage(e);
+    });
     this._bridge.onStatus((s: SessionStatus) => {
       this._status = s;
       for (const fn of _statusListeners) { try { fn(this, s); } catch { /* noop */ } }
@@ -120,6 +159,8 @@ export class SessionPanel implements vscode.Disposable {
     this._status = 'inactive';
     for (const fn of _statusListeners) { try { fn(this, 'inactive'); } catch { /* noop */ } }
     this._bridge.dispose();
+    this._chatStream?.end();
+    this._chatStream = undefined;
     this._panel.dispose();
     while (this._disposables.length > 0) { this._disposables.pop()?.dispose(); }
   }
@@ -134,12 +175,25 @@ export class SessionPanel implements vscode.Disposable {
           model: this._config.model, projectDir: this._config.projectDir,
           models: getStaticModels(this._config.provider),
         } satisfies SpecsmithEvent);
+        // Offer previous chat session replay
+        const prev = this._loadPreviousChat();
+        if (prev.length > 0) {
+          void this._panel.webview.postMessage({ type: 'system', message: `── Previous session (${prev.length} messages) ──` } satisfies SpecsmithEvent);
+          for (const e of prev) {
+            if (e.role === 'user')   { void this._panel.webview.postMessage({ type: 'system', message: `You: ${e.text.slice(0, 120)}${e.text.length > 120 ? '…' : ''}` }); }
+            else if (e.role === 'agent') { void this._panel.webview.postMessage({ type: 'llm_chunk', text: e.text }); }
+          }
+          void this._panel.webview.postMessage({ type: 'system', message: '── New session ──' } satisfies SpecsmithEvent);
+        }
         this._bridge.start();
         void this._refreshModels(this._config.provider);
         break;
 
       case 'send':
-        if (msg.text) { this._bridge.send(msg.text); }
+        if (msg.text) {
+          this._appendChat({ role: 'user', text: msg.text, ts: new Date().toISOString() });
+          this._bridge.send(msg.text);
+        }
         break;
 
       case 'stop':
@@ -149,6 +203,7 @@ export class SessionPanel implements vscode.Disposable {
       case 'setProvider':
         if (msg.provider) {
           this._config.provider = msg.provider;
+          this._saveSettings();
           void ApiKeyManager.getAllEnv(this._secrets).then((env) => {
             this._bridge.restart(this._config, env);
           });
@@ -157,7 +212,11 @@ export class SessionPanel implements vscode.Disposable {
         break;
 
       case 'setModel':
-        if (msg.model) { this._bridge.setModel(msg.model); this._config.model = msg.model; }
+        if (msg.model) {
+          this._bridge.setModel(msg.model);
+          this._config.model = msg.model;
+          this._saveSettings();
+        }
         break;
 
       case 'getModels':
@@ -227,6 +286,50 @@ export class SessionPanel implements vscode.Disposable {
     void this._panel.webview.postMessage({ type: 'models', models } satisfies SpecsmithEvent);
   }
 
+  // ── Settings persistence ───────────────────────────────────────────────────
+
+  private _saveSettings(): void {
+    const key = `specsmith.session.${this._config.projectDir}`;
+    void this._globalState.update(key, {
+      provider: this._config.provider,
+      model:    this._config.model,
+    } satisfies SavedSettings);
+  }
+
+  // ── Chat history ───────────────────────────────────────────────────────────
+
+  private _initChatHistory(): void {
+    try {
+      const chatDir = path.join(this._config.projectDir, CHAT_DIR);
+      fs.mkdirSync(chatDir, { recursive: true });
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      this._chatFile = path.join(chatDir, `chat-${stamp}.jsonl`);
+      this._chatStream = fs.createWriteStream(this._chatFile, { flags: 'a', encoding: 'utf8' });
+    } catch { /* project dir not writable — skip */ }
+  }
+
+  private _appendChat(entry: ChatEntry): void {
+    if (!this._chatStream) { return; }
+    try { this._chatStream.write(JSON.stringify(entry) + '\n'); } catch { /* ignore */ }
+  }
+
+  /** Load the most recent previous chat file (display only). */
+  private _loadPreviousChat(): ChatEntry[] {
+    try {
+      const chatDir = path.join(this._config.projectDir, CHAT_DIR);
+      if (!fs.existsSync(chatDir)) { return []; }
+      const files = fs.readdirSync(chatDir)
+        .filter((f) => f.endsWith('.jsonl') && f !== path.basename(this._chatFile ?? ''))
+        .sort().reverse();
+      if (!files.length) { return []; }
+      const lines = fs.readFileSync(path.join(chatDir, files[0]), 'utf8').trim().split('\n');
+      return lines
+        .map((l) => { try { return JSON.parse(l) as ChatEntry; } catch { return null; } })
+        .filter(Boolean)
+        .slice(-MAX_CHAT_DISPLAY) as ChatEntry[];
+    } catch { return []; }
+  }
+
   // ── Webview HTML ───────────────────────────────────────────────────────────
 
   // eslint-disable-next-line max-lines-per-function
@@ -274,6 +377,11 @@ export class SessionPanel implements vscode.Disposable {
   .tres{color:var(--dim);font-family:var(--mn);font-size:11px;max-height:100px;overflow:hidden;white-space:pre-wrap;word-break:break-all}
   .sl{align-self:center;color:var(--dim);font-size:11px;font-style:italic;text-align:center}
   .el{align-self:flex-start;color:var(--red);font-size:12px;background:rgba(244,71,71,.08);border-left:3px solid var(--red);border-radius:3px;padding:4px 9px;max-width:93%}
+  .el details summary{cursor:pointer;list-style:none;outline:none}
+  .el details summary::-webkit-details-marker{display:none}
+  .el details summary::before{content:'▶ ';font-size:9px}
+  .el details[open] summary::before{content:'▼ ';}
+  .el .err-detail{font-family:var(--mn);font-size:10px;color:var(--dim);margin-top:4px;white-space:pre-wrap;word-break:break-all}
   code{font-family:var(--mn);background:rgba(255,255,255,.07);padding:1px 4px;border-radius:3px;font-size:12px;color:var(--teal)}
   pre{background:rgba(0,0,0,.25);border:1px solid var(--br);border-radius:4px;padding:6px 9px;overflow-x:auto;font-size:11px;margin:4px 0}
   pre code{background:none;padding:0}
@@ -397,7 +505,29 @@ function addT(n,r,e){const d=document.createElement('div');d.className='tb'+(e?'
   <div class="tres">\${esc((r||'').slice(0,500))}\${(r||'').length>500?'<em>…</em>':''}</div>\`;
   C.appendChild(d);sb2()}
 function addS(m){const d=document.createElement('div');d.className='sl';d.textContent=m;C.appendChild(d);sb2()}
-function addE(m){const d=document.createElement('div');d.className='el';d.textContent='⚠ '+(m||'?');C.appendChild(d);sb2()}
+/* Known specsmith error patterns → short human-friendly message */
+const ERR_MAP=[
+  [/No such command 'run'/,        'specsmith version too old — upgrade: pip install --upgrade specsmith'],
+  [/No such option.*json-events/,  'specsmith < v0.3.1 — upgrade: pip install --upgrade specsmith'],
+  [/No API key/i,                  'No API key set — Ctrl+Shift+P → specsmith: Set API Key'],
+  [/ANTHROPIC_API_KEY/,            'Anthropic API key missing — run: specsmith: Set API Key'],
+  [/OPENAI_API_KEY/,               'OpenAI API key missing — run: specsmith: Set API Key'],
+  [/Usage:.*specsmith.*COMMAND/s,  'specsmith CLI error — see details'],
+];
+function smartErr(m){
+  for(const[re,msg]of ERR_MAP){if(re.test(m))return{short:msg,long:m}}
+  const lines=m.split('\\n').map(l=>l.trim()).filter(Boolean);
+  return lines.length>1?{short:lines[0],long:lines.slice(1).join('\\n')}:{short:m,long:''};
+}
+function addE(m){
+  const{short,long}=smartErr(m||'?');
+  const d=document.createElement('div');d.className='el';
+  if(long){
+    d.innerHTML=\`<details><summary>\u26a0 \${esc(short)}</summary><pre class="err-detail">\${esc(long)}</pre></details>\`;
+  }else{
+    d.textContent='\u26a0 '+short;
+  }
+  C.appendChild(d);sb2()}
 function addImg(u,l){const d=document.createElement('div');d.className='mu';
   d.innerHTML=\`<div class="bbl"><div style="font-size:11px;color:var(--dim);margin-bottom:4px">📎 \${esc(l)}</div>
   <img class="iprev" src="\${u}" alt="\${esc(l)}"></div><div class="mt">\${ts()}</div>\`;
@@ -434,10 +564,34 @@ document.getElementById('it').addEventListener('keydown',e=>{
   if(e.key==='Escape'&&busy){e.preventDefault();stp();return}
   if(e.key==='ArrowUp'&&!e.target.value.trim()){e.preventDefault();e.target.value=lastU;e.target.setSelectionRange(lastU.length,lastU.length)}
   if(e.key==='@'&&!e.target.value.trim()){e.preventDefault();pf()}})
-function popMdl(prov,mdls,sel){const s=document.getElementById('ms');const pr=s.value;s.innerHTML='';
-  (mdls&&mdls.length?mdls:[]).forEach(m=>{const o=document.createElement('option');o.value=m.id;o.textContent=m.name||m.id;
-  o.title=[m.description||'',m.contextWindow?\`ctx: \${m.contextWindow.toLocaleString()}px\`:''].filter(Boolean).join(' — ');s.appendChild(o)});
-  if(sel)s.value=sel;else if(pr&&[...s.options].some(o=>o.value===pr))s.value=pr;
+function popMdl(prov,mdls,sel){
+  const s=document.getElementById('ms');const pr=sel||s.value;s.innerHTML='';
+  const list=mdls&&mdls.length?mdls:[];
+  /* Group by category into <optgroup> */
+  const groups={};
+  for(const m of list){const c=m.category||'Models';(groups[c]=groups[c]||[]).push(m)}
+  const cats=Object.keys(groups);
+  if(cats.length>1){
+    for(const cat of cats){
+      const og=document.createElement('optgroup');og.label=cat;
+      for(const m of groups[cat]){
+        const o=document.createElement('option');o.value=m.id;
+        o.textContent=m.name||m.id;
+        const ctx=m.contextWindow?(m.contextWindow>=1000000?Math.round(m.contextWindow/1000000)+'M ctx':Math.round(m.contextWindow/1000)+'K ctx'):'';
+        o.title=[m.description||'',ctx].filter(Boolean).join(' • ');
+        og.appendChild(o);
+      }
+      s.appendChild(og);
+    }
+  }else{
+    for(const m of list){
+      const o=document.createElement('option');o.value=m.id;o.textContent=m.name||m.id;
+      const ctx=m.contextWindow?(m.contextWindow>=1000000?Math.round(m.contextWindow/1000000)+'M ctx':Math.round(m.contextWindow/1000)+'K ctx'):'';
+      o.title=[m.description||'',ctx].filter(Boolean).join(' • ');
+      s.appendChild(o);
+    }
+  }
+  if(pr&&[...s.options].some(o=>o.value===pr))s.value=pr;
   curMdl=s.value;updDesc()}
 function updDesc(){const s=document.getElementById('ms'),o=s.options[s.selectedIndex],d=document.getElementById('mdesc');d.textContent=o?.title||'';d.title=o?.title||''}
 document.getElementById('ps').addEventListener('change',e=>{const p=e.target.value;

@@ -60,9 +60,10 @@ export interface SpecsmithEvent {
 /** Model info returned by provider APIs. */
 export interface ModelInfo {
   id: string;
-  name: string;       // display name
-  description?: string;
+  name: string;         // display name
+  description?: string; // short capability description
   contextWindow?: number;
+  category?: string;    // for grouping in optgroup (e.g. 'Flagship', 'Reasoning')
 }
 
 /** Messages sent from the webview to the extension host. */

@@ -1,9 +1,13 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 BitConcepts, LLC. All rights reserved.
 import * as vscode from 'vscode';
+import * as fs from 'fs';
+import * as path from 'path';
 import { SessionPanel, onSessionStatusChange } from './SessionPanel';
-import { ProjectTreeProvider, ProjectItem } from './ProjectTree';
-import { FileTreeProvider, FileItem, newFile, newFolder, deleteFileItem, renameFileItem } from './FileTree';
+import {
+  ProjectTreeProvider, ProjectItem,
+  fileNewFile, fileNewFolder, fileDelete, fileRename,
+} from './ProjectTree';
 import { EpistemicBar } from './EpistemicBar';
 import { ApiKeyManager } from './ApiKeyManager';
 import { showHelp } from './HelpPanel';
@@ -13,7 +17,7 @@ import { SessionStatus } from './types';
 
 export function activate(context: vscode.ExtensionContext): void {
 
-  // ── Sidebar: Projects ────────────────────────────────────────────────────
+  // ── Sidebar: unified Projects (includes file tree + governance) ───────────
   const projectTree = new ProjectTreeProvider(context);
   const projectView = vscode.window.createTreeView('specsmith.projects', {
     treeDataProvider: projectTree,
@@ -26,29 +30,19 @@ export function activate(context: vscode.ExtensionContext): void {
     treeDataProvider: sessionTree,
   });
 
-  // ── Sidebar: Files ───────────────────────────────────────────────────────
-  const fileTree = new FileTreeProvider();
-  const fileView = vscode.window.createTreeView('specsmith.files', {
-    treeDataProvider: fileTree,
-    showCollapseAll:  true,
-  });
-
   // ── Status bar ────────────────────────────────────────────────────────────
   const epistemicBar = new EpistemicBar(context);
 
-  // ── Session status → tree + file tree updates ────────────────────────────
+  // ── Session status → session tree ────────────────────────────────────────
   context.subscriptions.push(
-    onSessionStatusChange((panel, _status: SessionStatus) => {
+    onSessionStatusChange((_panel: SessionPanel, _status: SessionStatus) => {
       sessionTree.refresh();
-      // Update file tree to track the active session's directory
-      const cur = SessionPanel.current();
-      fileTree.setRoot(cur?.projectDir);
     }),
   );
 
   // ── Helpers ───────────────────────────────────────────────────────────────
 
-  function defaults() {
+  function defaultCfg() {
     const cfg = vscode.workspace.getConfiguration('specsmith');
     return {
       provider: cfg.get<string>('defaultProvider', 'anthropic'),
@@ -57,8 +51,7 @@ export function activate(context: vscode.ExtensionContext): void {
   }
 
   async function openSession(projectDir: string): Promise<void> {
-    const d = defaults();
-    // Auto-select provider: if only 1 API key is set, use it; otherwise use setting
+    const d = defaultCfg();
     const { provider, hasKeys } = await ApiKeyManager.getDefaultProvider(context.secrets, d.provider);
 
     if (!hasKeys) {
@@ -72,9 +65,8 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     }
 
-    const session = await SessionPanel.create(context, projectDir, provider, d.model);
+    await SessionPanel.create(context, projectDir, provider, d.model);
     sessionTree.refresh();
-    fileTree.setRoot(session.projectDir);
     projectTree.addProject(projectDir);
   }
 
@@ -82,21 +74,20 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     vscode.commands.registerCommand('specsmith.newSession', async () => {
-      const choices: vscode.QuickPickItem[] = (vscode.workspace.workspaceFolders ?? [])
-        .map((f) => ({ label: f.name, description: f.uri.fsPath, detail: 'Workspace folder' }));
-
+      const choices = (vscode.workspace.workspaceFolders ?? []).map((f) => ({
+        label: f.name, description: f.uri.fsPath, detail: 'Workspace folder',
+      }));
       let picked: string | undefined;
       if (choices.length === 1) {
         picked = choices[0].description;
       } else if (choices.length > 1) {
         const sel = await vscode.window.showQuickPick(
           [...choices, { label: '$(folder-opened) Browse…', description: '__browse__' }],
-          { placeHolder: 'Select project folder for this agent session' },
+          { placeHolder: 'Select project folder for this session' },
         );
         if (!sel) { return; }
         picked = sel.description === '__browse__' ? undefined : sel.description;
       }
-
       if (!picked) {
         const uri = await vscode.window.showOpenDialog({
           canSelectFolders: true, canSelectFiles: false, canSelectMany: false,
@@ -118,11 +109,8 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     vscode.commands.registerCommand('specsmith.deleteSession', (item?: SessionItem) => {
-      if (item?.panel) {
-        item.panel.dispose();
-        sessionTree.refresh();
-        fileTree.setRoot(SessionPanel.current()?.projectDir);
-      }
+      item?.panel.dispose();
+      sessionTree.refresh();
     }),
   );
 
@@ -140,16 +128,14 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     vscode.commands.registerCommand('specsmith.createProject', async () => {
-      const name = await vscode.window.showInputBox({
-        prompt: 'New project name', placeHolder: 'my-project',
-      });
+      const name = await vscode.window.showInputBox({ prompt: 'New project name', placeHolder: 'my-project' });
       if (!name) { return; }
       const uri = await vscode.window.showOpenDialog({
         canSelectFolders: true, canSelectFiles: false, canSelectMany: false,
         openLabel: 'Create project here',
       });
       if (!uri?.[0]) { return; }
-      const cfg = vscode.workspace.getConfiguration('specsmith');
+      const cfg  = vscode.workspace.getConfiguration('specsmith');
       const exec = cfg.get<string>('executablePath', 'specsmith');
       const term = vscode.window.createTerminal('specsmith init');
       term.sendText(`${exec} init --name "${name}" --project-dir "${uri[0].fsPath}"`);
@@ -165,7 +151,7 @@ export function activate(context: vscode.ExtensionContext): void {
         openLabel: 'Import this project',
       });
       if (!uri?.[0]) { return; }
-      const cfg = vscode.workspace.getConfiguration('specsmith');
+      const cfg  = vscode.workspace.getConfiguration('specsmith');
       const exec = cfg.get<string>('executablePath', 'specsmith');
       const term = vscode.window.createTerminal('specsmith import');
       term.sendText(`${exec} import --project-dir "${uri[0].fsPath}"`);
@@ -181,32 +167,28 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('specsmith.refreshProjects', () => {
-      projectTree.refresh();
-      fileTree.refresh();
-    }),
+    vscode.commands.registerCommand('specsmith.refreshProjects', () => projectTree.refresh()),
   );
 
-  // ── Commands: File tree ──────────────────────────────────────────────────
+  // ── Commands: File operations (tree context menu) ────────────────────────
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('specsmith.refreshFiles', () => fileTree.refresh()),
-    vscode.commands.registerCommand('specsmith.newFile', (item?: FileItem) => {
-      if (item) { void newFile(item).then(() => fileTree.refresh()); }
+    vscode.commands.registerCommand('specsmith.newFile', (item?: ProjectItem) => {
+      if (item) { void fileNewFile(item).then(() => projectTree.refresh()); }
     }),
-    vscode.commands.registerCommand('specsmith.newFolder', (item?: FileItem) => {
-      if (item) { void newFolder(item).then(() => fileTree.refresh()); }
+    vscode.commands.registerCommand('specsmith.newFolder', (item?: ProjectItem) => {
+      if (item) { void fileNewFolder(item).then(() => projectTree.refresh()); }
     }),
-    vscode.commands.registerCommand('specsmith.deleteFile', (item?: FileItem) => {
-      if (item) { void deleteFileItem(item).then(() => fileTree.refresh()); }
+    vscode.commands.registerCommand('specsmith.deleteFile', (item?: ProjectItem) => {
+      if (item) { void fileDelete(item).then(() => projectTree.refresh()); }
     }),
-    vscode.commands.registerCommand('specsmith.renameFile', (item?: FileItem) => {
-      if (item) { void renameFileItem(item).then(() => fileTree.refresh()); }
+    vscode.commands.registerCommand('specsmith.renameFile', (item?: ProjectItem) => {
+      if (item) { void fileRename(item).then(() => projectTree.refresh()); }
     }),
-    vscode.commands.registerCommand('specsmith.copyFilePath', (item?: FileItem) => {
+    vscode.commands.registerCommand('specsmith.copyFilePath', (item?: ProjectItem) => {
       if (item?.fsPath) { void vscode.env.clipboard.writeText(item.fsPath); }
     }),
-    vscode.commands.registerCommand('specsmith.revealInExplorer', (item?: FileItem) => {
+    vscode.commands.registerCommand('specsmith.revealInExplorer', (item?: ProjectItem) => {
       if (item?.fsPath) {
         void vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(item.fsPath));
       }
@@ -227,7 +209,7 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
   );
 
-  // ── Commands: Tools ──────────────────────────────────────────────────────
+  // ── Commands: specsmith tools ────────────────────────────────────────────
 
   context.subscriptions.push(
     vscode.commands.registerCommand('specsmith.runAudit', () => {
@@ -235,11 +217,110 @@ export function activate(context: vscode.ExtensionContext): void {
       if (s) { s.sendCommand('audit'); epistemicBar.refresh(); }
       else { void vscode.window.showInformationMessage('specsmith: open a session first.'); }
     }),
-    vscode.commands.registerCommand('specsmith.runValidate', () => {
-      SessionPanel.current()?.sendCommand('validate');
+    vscode.commands.registerCommand('specsmith.runValidate', () => SessionPanel.current()?.sendCommand('validate')),
+    vscode.commands.registerCommand('specsmith.runDoctor',   () => SessionPanel.current()?.sendCommand('doctor')),
+  );
+
+  // ── Commands: Requirements + governance UI ────────────────────────────────
+
+  // Quick-add a requirement to REQUIREMENTS.md
+  context.subscriptions.push(
+    vscode.commands.registerCommand('specsmith.addRequirement', async () => {
+      const session = SessionPanel.current();
+      const projectDir = session?.projectDir
+        ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      if (!projectDir) {
+        void vscode.window.showWarningMessage('specsmith: no project open.');
+        return;
+      }
+
+      const reqFile = _findReqFile(projectDir);
+      if (!reqFile) {
+        void vscode.window.showWarningMessage('No REQUIREMENTS.md found. Create one first.');
+        return;
+      }
+
+      const id = await vscode.window.showInputBox({
+        prompt: 'Requirement ID (e.g. REQ-UI-001)',
+        placeHolder: 'REQ-XXX-001',
+        validateInput: (v) => /^[A-Z][A-Z0-9-]+$/.test(v) ? undefined : 'Use format: REQ-CAT-001',
+      });
+      if (!id) { return; }
+
+      const desc = await vscode.window.showInputBox({
+        prompt: 'Requirement description',
+        placeHolder: 'The system shall…',
+      });
+      if (!desc) { return; }
+
+      const priority = await vscode.window.showQuickPick(
+        ['P1 — Must Have', 'P2 — Should Have', 'P3 — Nice to Have'],
+        { placeHolder: 'Priority' },
+      );
+      if (!priority) { return; }
+
+      const pLevel = priority.split(' ')[0]; // 'P1', 'P2', 'P3'
+      const entry  = `\n### ${id}\n**Priority**: ${pLevel}\n**Description**: ${desc}\n**Status**: Draft\n`;
+
+      fs.appendFileSync(reqFile, entry, 'utf8');
+      void vscode.window.showTextDocument(vscode.Uri.file(reqFile)).then((ed) => {
+        const lastLine = ed.document.lineCount - 1;
+        ed.revealRange(new vscode.Range(lastLine, 0, lastLine, 0));
+      });
+      void vscode.window.showInformationMessage(`Added ${id} to ${path.basename(reqFile)}`);
+      projectTree.refresh();
     }),
-    vscode.commands.registerCommand('specsmith.runDoctor', () => {
-      SessionPanel.current()?.sendCommand('doctor');
+  );
+
+  // Open scaffold.yml
+  context.subscriptions.push(
+    vscode.commands.registerCommand('specsmith.openScaffold', async () => {
+      const session = SessionPanel.current();
+      const projectDir = session?.projectDir
+        ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      if (!projectDir) { void vscode.window.showWarningMessage('specsmith: no project open.'); return; }
+
+      const candidates = ['scaffold.yml', 'scaffold.yaml', '.specsmith/config.yml'];
+      const found = candidates.map((c) => path.join(projectDir, c)).find(fs.existsSync);
+      if (found) {
+        await vscode.window.showTextDocument(vscode.Uri.file(found));
+      } else {
+        void vscode.window.showWarningMessage('scaffold.yml not found. Run specsmith init first.');
+      }
+    }),
+  );
+
+  // Navigate all requirements (quick pick)
+  context.subscriptions.push(
+    vscode.commands.registerCommand('specsmith.navigateRequirements', async () => {
+      const session = SessionPanel.current();
+      const projectDir = session?.projectDir ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      if (!projectDir) { void vscode.window.showWarningMessage('specsmith: no project open.'); return; }
+
+      const reqFile = _findReqFile(projectDir);
+      if (!reqFile) { void vscode.window.showWarningMessage('No REQUIREMENTS.md found.'); return; }
+
+      const content = fs.readFileSync(reqFile, 'utf8');
+      const matches = [...content.matchAll(/^###\s+(REQ-[A-Z0-9-]+)(.*)/gm)];
+      if (!matches.length) { void vscode.window.showInformationMessage('No requirements found.'); return; }
+
+      const items = matches.map((m, i) => ({
+        label:       m[1],
+        description: m[2].trim(),
+        lineNumber:  content.slice(0, m.index).split('\n').length - 1,
+      }));
+
+      const picked = await vscode.window.showQuickPick(items, {
+        placeHolder: `${items.length} requirements in ${path.basename(reqFile)}`,
+        matchOnDescription: true,
+      });
+      if (!picked) { return; }
+
+      const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(reqFile));
+      const ed  = await vscode.window.showTextDocument(doc);
+      const pos = new vscode.Position(picked.lineNumber, 0);
+      ed.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.InCenter);
+      ed.selection = new vscode.Selection(pos, pos);
     }),
   );
 
@@ -259,13 +340,22 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   // ── Disposables ───────────────────────────────────────────────────────────
-
-  context.subscriptions.push(projectView, sessionView, fileView, projectTree, fileTree, epistemicBar);
+  context.subscriptions.push(projectView, sessionView, projectTree, epistemicBar);
 }
 
-export function deactivate(): void { /* all cleaned up via context.subscriptions */ }
+export function deactivate(): void { /* context.subscriptions handles cleanup */ }
 
-// ── Sessions TreeDataProvider (with colored status icons) ────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function _findReqFile(projectDir: string): string | undefined {
+  const candidates = [
+    path.join(projectDir, 'REQUIREMENTS.md'),
+    path.join(projectDir, 'docs', 'REQUIREMENTS.md'),
+  ];
+  return candidates.find(fs.existsSync);
+}
+
+// ── Sessions TreeDataProvider ─────────────────────────────────────────────────
 
 class SessionItem extends vscode.TreeItem {
   constructor(public readonly panel: SessionPanel) {
@@ -273,24 +363,16 @@ class SessionItem extends vscode.TreeItem {
     this.contextValue = 'session';
     this.tooltip      = panel.projectDir;
     this.iconPath     = _statusIcon(panel.status);
-    this.command      = {
-      command:   'specsmith.newSessionFromProject',
-      title:     'Focus',
-      arguments: [],
-    };
+    this.command      = { command: 'specsmith.newSessionFromProject', title: 'Focus', arguments: [] };
   }
 }
 
 function _statusIcon(status: SessionStatus): vscode.ThemeIcon {
   switch (status) {
-    case 'starting': return new vscode.ThemeIcon('circle-filled',
-      new vscode.ThemeColor('charts.yellow'));
-    case 'waiting':  return new vscode.ThemeIcon('circle-filled',
-      new vscode.ThemeColor('charts.green'));
+    case 'starting': return new vscode.ThemeIcon('circle-filled', new vscode.ThemeColor('charts.yellow'));
+    case 'waiting':  return new vscode.ThemeIcon('circle-filled', new vscode.ThemeColor('charts.green'));
     case 'running':  return new vscode.ThemeIcon('loading~spin');
-    case 'error':    return new vscode.ThemeIcon('circle-filled',
-      new vscode.ThemeColor('charts.red'));
-    case 'inactive': return new vscode.ThemeIcon('circle-outline');
+    case 'error':    return new vscode.ThemeIcon('circle-filled', new vscode.ThemeColor('charts.red'));
     default:         return new vscode.ThemeIcon('circle-outline');
   }
 }
@@ -301,7 +383,5 @@ class SessionTreeProvider implements vscode.TreeDataProvider<SessionItem> {
 
   refresh(): void { this._change.fire(); }
   getTreeItem(el: SessionItem): vscode.TreeItem { return el; }
-  getChildren(): SessionItem[] {
-    return SessionPanel.all().map((p) => new SessionItem(p));
-  }
+  getChildren(): SessionItem[] { return SessionPanel.all().map((p) => new SessionItem(p)); }
 }
