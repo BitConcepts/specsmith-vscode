@@ -79,8 +79,9 @@ export interface WebviewMessage {
     | 'pickFile'
     | 'exportChat'
     | 'openFile'
-    | 'clearHistory' // webview → host: clear files + agent context + display
-    | 'copyAll';     // webview → host: (handled entirely client-side, no-op here)
+    | 'clearHistory'   // webview → host: clear files + agent context + display
+    | 'copyAll'        // webview → host: (handled entirely client-side, no-op here)
+    | 'downloadModel'; // webview → host: user selected a dl: prefixed model
   text?: string;
   provider?: string;
   model?: string;

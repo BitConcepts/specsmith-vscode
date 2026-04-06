@@ -14,6 +14,7 @@ import { EpistemicBar } from './EpistemicBar';
 import { ApiKeyManager } from './ApiKeyManager';
 import { showHelp } from './HelpPanel';
 import { fetchModels } from './ModelRegistry';
+import { OllamaManager, TASK_SUGGESTIONS } from './OllamaManager';
 import { SessionStatus } from './types';
 
 // ── Activation ────────────────────────────────────────────────────────────────
@@ -413,6 +414,102 @@ export function activate(context: vscode.ExtensionContext): void {
       if (ans === 'Clear All') {
         for (const s of sessions) { s.clearHistoryExternal(); }
         void vscode.window.showInformationMessage(`${sessions.length} session(s) cleared.`);
+      }
+    }),
+  );
+
+  // ── Commands: Ollama (download + task-based model selection) ────────────
+
+  context.subscriptions.push(
+    // Called when user selects a 'dl:' prefixed model from the dropdown
+    vscode.commands.registerCommand('specsmith.downloadModel', async (modelId: string) => {
+      if (!modelId) { return; }
+
+      // Confirm before downloading
+      const catalog = (await import('./OllamaManager')).OLLAMA_CATALOG.find((c) => c.id === modelId);
+      const detail  = catalog ? `${catalog.sizeGb}GB — ${catalog.notes}` : 'unknown size';
+
+      const ans = await vscode.window.showInformationMessage(
+        `Download "${modelId}"?`,
+        { detail, modal: true },
+        'Download',
+        'Cancel',
+      );
+      if (ans !== 'Download') { return; }
+
+      const cts = new vscode.CancellationTokenSource();
+      const ok  = await OllamaManager.download(modelId, cts.token);
+      cts.dispose();
+
+      if (ok) {
+        // Refresh Ollama model list in all open sessions
+        const models = await fetchModels('ollama');
+        for (const panel of SessionPanel.all()) {
+          panel.postModels('ollama', models);
+        }
+        // Switch the active session to the newly downloaded model
+        const current = SessionPanel.current();
+        if (current) { current.setModelExternal(modelId); }
+      }
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('specsmith.selectModelForTask', async () => {
+      // Step 1: pick task type
+      const taskItems = Object.keys(TASK_SUGGESTIONS).map((k) => ({
+        label: k,
+        description: TASK_SUGGESTIONS[k].join(', '),
+      }));
+
+      const taskPick = await vscode.window.showQuickPick(taskItems, {
+        placeHolder: 'What do you need the model for?',
+        matchOnDescription: true,
+      });
+      if (!taskPick) { return; }
+
+      // Gather available info
+      const [installedIds, vramGb] = await Promise.all([
+        OllamaManager.getInstalledIds(),
+        OllamaManager.getVramGb(),
+      ]);
+      const suggestions = await OllamaManager.suggestForTask(taskPick.label, installedIds, vramGb);
+
+      if (!suggestions.length) {
+        void vscode.window.showInformationMessage(`No local models match task "${taskPick.label}". Consider downloading one.`);
+        return;
+      }
+
+      // Step 2: pick a specific model
+      const modelItems: vscode.QuickPickItem[] = suggestions.map((s) => ({
+        label:       s.installed ? `✓ ${s.name}` : `⬇ ${s.name}`,
+        description: s.installed
+          ? 'Installed — ready'
+          : `${s.sizeGb?.toFixed(1) ?? '?'}GB — click to download`,
+        detail:      s.notes,
+      }));
+
+      const modelPick = await vscode.window.showQuickPick(modelItems, {
+        placeHolder:  `Best models for "${taskPick.label}" (✓ = installed, ⬇ = download needed)`,
+        matchOnDetail: true,
+      });
+      if (!modelPick) { return; }
+
+      const selected = suggestions[modelItems.indexOf(modelPick)];
+      if (!selected) { return; }
+
+      if (selected.installed) {
+        // Just switch the current session
+        const cur = SessionPanel.current();
+        if (cur) {
+          cur.setModelExternal(selected.id);
+          void vscode.window.showInformationMessage(`✓ Switched to ${selected.name}`);
+        } else {
+          void vscode.window.showInformationMessage(`Open a session first, then select: ${selected.id}`);
+        }
+      } else {
+        // Trigger download
+        void vscode.commands.executeCommand('specsmith.downloadModel', selected.id);
       }
     }),
   );

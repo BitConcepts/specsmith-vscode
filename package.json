@@ -48,8 +48,10 @@
       { "command": "specsmith.openScaffold",          "title": "Open Scaffolding File",       "category": "specsmith", "icon": "$(settings-gear)" },
       { "command": "specsmith.showHelp",              "title": "Show Help",                   "category": "specsmith", "icon": "$(question)" },
       { "command": "specsmith.installOrUpgrade",      "title": "Install or Upgrade specsmith", "category": "specsmith", "icon": "$(cloud-download)" },
-      { "command": "specsmith.clearHistory",          "title": "Clear Chat History (current session)", "category": "specsmith", "icon": "$(clear-all)" },
-      { "command": "specsmith.clearAllHistory",       "title": "Clear Chat History (all sessions)",    "category": "specsmith", "icon": "$(clear-all)" }
+      { "command": "specsmith.clearHistory",          "title": "Clear Chat History (current session)",   "category": "specsmith", "icon": "$(clear-all)" },
+      { "command": "specsmith.clearAllHistory",       "title": "Clear Chat History (all sessions)",      "category": "specsmith", "icon": "$(clear-all)" },
+      { "command": "specsmith.downloadModel",         "title": "Download Ollama Model",                  "category": "specsmith", "icon": "$(cloud-download)" },
+      { "command": "specsmith.selectModelForTask",    "title": "Select Model for Task (GPU-aware)",      "category": "specsmith", "icon": "$(symbol-misc)" }
     ],
     "menus": {
       "view/title": [

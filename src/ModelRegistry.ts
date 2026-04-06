@@ -169,13 +169,9 @@ async function fetchMistral(apiKey: string): Promise<ModelInfo[]> {
 }
 
 async function fetchOllama(): Promise<ModelInfo[]> {
-  // Ollama runs locally — no auth needed
-  const raw = await get('http://localhost:11434/api/tags');
-  const data = JSON.parse(raw) as { models?: Array<{ name: string; size?: number }> };
-  return (data.models ?? []).map((m) => ({
-    id:   m.name,
-    name: m.name,
-  }));
+  // Use OllamaManager which merges installed + catalog + GPU-aware filtering
+  const { OllamaManager } = await import('./OllamaManager');
+  return OllamaManager.getAvailableModels();
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────

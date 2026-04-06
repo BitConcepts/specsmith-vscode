@@ -330,7 +330,23 @@ export class SessionPanel implements vscode.Disposable {
         break;
 
       case 'copyAll': break; // handled entirely in webview JS
+
+      case 'downloadModel':
+        // Delegate to extension.ts via a fired command so the download
+        // progress notification runs at the extension host level
+        void vscode.commands.executeCommand('specsmith.downloadModel', msg.model ?? '');
+        break;
     }
+  }
+
+  /** Update the model in a running session from outside (e.g. after download). */
+  setModelExternal(modelId: string): void {
+    this._bridge.setModel(modelId);
+    this._config.model = modelId;
+    void this._panel.webview.postMessage({
+      type: 'system',
+      message: `Model switched to ${modelId}`,
+    } satisfies SpecsmithEvent);
   }
 
   private async _refreshModels(provider: string): Promise<void> {
@@ -677,7 +693,18 @@ function popMdl(prov,mdls,sel){
 function updDesc(){const s=document.getElementById('ms'),o=s.options[s.selectedIndex],d=document.getElementById('mdesc');d.textContent=o?.title||'';d.title=o?.title||''}
 document.getElementById('ps').addEventListener('change',e=>{const p=e.target.value;
   vscode.postMessage({command:'setProvider',provider:p});vscode.postMessage({command:'getModels',provider:p})});
-document.getElementById('ms').addEventListener('change',e=>{curMdl=e.target.value;updDesc();vscode.postMessage({command:'setModel',model:curMdl})});
+document.getElementById('ms').addEventListener('change',e=>{
+  const val=e.target.value;
+  if(val.startsWith('dl:')){
+    // Not downloaded yet — restore previous selection and ask host to download
+    e.target.value=curMdl;
+    const realId=val.slice(3);
+    vscode.postMessage({command:'downloadModel',model:realId});
+  }else{
+    curMdl=val;updDesc();
+    vscode.postMessage({command:'setModel',model:curMdl});
+  }
+});
 /* Drag and drop — uses dragover polling (reliable; no stuck-overlay bug) */
 const _IB=document.getElementById('ibar');let _dt;
 function _dsh(){_IB.classList.add('da')}
