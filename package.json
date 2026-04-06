@@ -1,0 +1,200 @@
+{
+  "name": "specsmith-vscode",
+  "displayName": "specsmith — AEE Workbench",
+  "description": "Applied Epistemic Engineering workbench for VS Code. Multi-project AI agent sessions with belief tracking, token monitoring, and governance tools.",
+  "version": "0.1.0",
+  "publisher": "BitConcepts",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "AI",
+    "Other"
+  ],
+  "keywords": [
+    "ai",
+    "agent",
+    "epistemic",
+    "requirements",
+    "governance",
+    "specsmith"
+  ],
+  "icon": "media/specsmith-128.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/BitConcepts/specsmith-vscode"
+  },
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "specsmith",
+          "title": "specsmith AEE",
+          "icon": "media/specsmith.svg"
+        }
+      ]
+    },
+    "views": {
+      "specsmith": [
+        {
+          "id": "specsmith.projects",
+          "name": "Projects",
+          "type": "tree"
+        },
+        {
+          "id": "specsmith.sessions",
+          "name": "Active Sessions",
+          "type": "tree"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "specsmith.newSession",
+        "title": "New Agent Session",
+        "category": "specsmith",
+        "icon": "$(add)"
+      },
+      {
+        "command": "specsmith.newSessionFromProject",
+        "title": "Open Agent Session",
+        "category": "specsmith",
+        "icon": "$(play)"
+      },
+      {
+        "command": "specsmith.closeSession",
+        "title": "Close Session",
+        "category": "specsmith",
+        "icon": "$(close)"
+      },
+      {
+        "command": "specsmith.openProject",
+        "title": "Add Project Folder",
+        "category": "specsmith",
+        "icon": "$(folder-opened)"
+      },
+      {
+        "command": "specsmith.removeProject",
+        "title": "Remove from Sidebar",
+        "category": "specsmith",
+        "icon": "$(remove)"
+      },
+      {
+        "command": "specsmith.refreshProjects",
+        "title": "Refresh",
+        "category": "specsmith",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "specsmith.runAudit",
+        "title": "Run Audit",
+        "category": "specsmith"
+      },
+      {
+        "command": "specsmith.runValidate",
+        "title": "Run Validate",
+        "category": "specsmith"
+      },
+      {
+        "command": "specsmith.runDoctor",
+        "title": "Run Doctor",
+        "category": "specsmith"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "specsmith.newSession",
+          "when": "view == specsmith.sessions",
+          "group": "navigation"
+        },
+        {
+          "command": "specsmith.openProject",
+          "when": "view == specsmith.projects",
+          "group": "navigation"
+        },
+        {
+          "command": "specsmith.refreshProjects",
+          "when": "view == specsmith.projects",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "specsmith.newSessionFromProject",
+          "when": "view == specsmith.projects && viewItem == project",
+          "group": "inline"
+        },
+        {
+          "command": "specsmith.removeProject",
+          "when": "view == specsmith.projects && viewItem == project",
+          "group": "1_project"
+        },
+        {
+          "command": "specsmith.closeSession",
+          "when": "view == specsmith.sessions && viewItem == session",
+          "group": "inline"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "specsmith",
+      "properties": {
+        "specsmith.executablePath": {
+          "type": "string",
+          "default": "specsmith",
+          "description": "Path to the specsmith CLI executable. Defaults to 'specsmith' (expects it on PATH)."
+        },
+        "specsmith.defaultProvider": {
+          "type": "string",
+          "default": "anthropic",
+          "enum": [
+            "anthropic",
+            "openai",
+            "gemini",
+            "mistral",
+            "ollama"
+          ],
+          "enumDescriptions": [
+            "Anthropic Claude (requires ANTHROPIC_API_KEY)",
+            "OpenAI GPT/O-series (requires OPENAI_API_KEY)",
+            "Google Gemini (requires GOOGLE_API_KEY)",
+            "Mistral AI + Pixtral OCR (requires MISTRAL_API_KEY)",
+            "Ollama local models (no API key needed)"
+          ],
+          "description": "Default LLM provider for new sessions."
+        },
+        "specsmith.defaultModel": {
+          "type": "string",
+          "default": "",
+          "description": "Default model name override (leave blank to use provider default)."
+        },
+        "specsmith.watchedProjects": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Project directories to persist in the sidebar between sessions."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "package": "npm run build && vsce package",
+    "lint": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "esbuild": "^0.20.0",
+    "typescript": "^5.3.0"
+  }
+}
