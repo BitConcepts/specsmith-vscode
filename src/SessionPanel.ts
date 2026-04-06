@@ -456,8 +456,8 @@ export class SessionPanel implements vscode.Disposable {
   <div id="typ"><div class="d"></div><div class="d"></div><div class="d"></div>
     <span>Agent thinking…</span></div>
   <div id="ir">
-    <textarea id="it" rows="2" placeholder="Message AEE agent… (Ctrl+Enter · @ file · drag/drop)"></textarea>
-    <button id="mainbtn" title="Send (Ctrl+Enter)" onclick="mainAct()">↑</button>
+    <textarea id="it" rows="2" placeholder="Message AEE agent… (Enter to send · Shift+Enter newline · @ file · drag/drop)"></textarea>
+    <button id="mainbtn" title="Send (Enter)" onclick="mainAct()">↑</button>
   </div>
   <div id="tr">
     <button class="tb2" onclick="q('audit')">🔍 audit</button>
@@ -468,7 +468,7 @@ export class SessionPanel implements vscode.Disposable {
     <button class="tb2" onclick="q('/clear')">🗑 clear</button>
     <button class="tb2" onclick="q('status')">📊 status</button>
     <button class="tb2" onclick="pf()" title="Pick @file">@ file</button>
-    <span class="kh">Ctrl+Enter</span>
+    <span class="kh">Enter sends · Shift+Enter newline</span>
   </div>
 </div>
 <script>
@@ -544,7 +544,7 @@ function mainAct(){if(busy)stp();else snd()}
 function setBusy(v){busy=v;document.getElementById('it').disabled=v;
   document.getElementById('typ').className=v?'show':'';
   const b=document.getElementById('mainbtn');
-  b.textContent=v?'◼':'↑';b.title=v?'Stop agent (click or Esc)':'Send (Ctrl+Enter)';
+  b.textContent=v?'◼':'↑';b.title=v?'Stop agent (click or Esc)':'Send (Enter)';
   if(v)b.classList.add('busy');else b.classList.remove('busy');
   document.querySelectorAll('.tb2').forEach(b=>b.disabled=v)}
 function snd(){if(busy)return;const i=document.getElementById('it'),t=i.value.trim();if(!t)return;
@@ -560,7 +560,8 @@ function exportChat(){const ms=[];C.querySelectorAll('[data-raw]').forEach(el=>{
   vscode.postMessage({command:'exportChat',markdown:md})}
 function pf(){vscode.postMessage({command:'pickFile'})}
 document.getElementById('it').addEventListener('keydown',e=>{
-  if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){e.preventDefault();snd();return}
+  /* Enter alone = send; Ctrl+Enter or Shift+Enter = insert newline (default) */
+  if(e.key==='Enter'&&!e.shiftKey&&!e.ctrlKey&&!e.metaKey&&!e.altKey){e.preventDefault();snd();return}
   if(e.key==='Escape'&&busy){e.preventDefault();stp();return}
   if(e.key==='ArrowUp'&&!e.target.value.trim()){e.preventDefault();e.target.value=lastU;e.target.setSelectionRange(lastU.length,lastU.length)}
   if(e.key==='@'&&!e.target.value.trim()){e.preventDefault();pf()}})

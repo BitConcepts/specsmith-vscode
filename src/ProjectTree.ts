@@ -19,6 +19,14 @@ import * as path from 'path';
 
 // ── Item kinds ────────────────────────────────────────────────────────────────
 
+// TODO(multi-domain): Projects with multiple technology domains (e.g. Yocto + Python + VHDL + C)
+// can cause other VS Code extensions (e.g. BitBake/Yocto extension) to inject their own items
+// into the right-click context menu (e.g. "Open recipe") when they detect relevant files.
+// This is not a specsmith-vscode defect — it is caused by other extensions matching on project
+// file patterns. Future work: implement domain-aware session configuration and consider gating
+// specsmith tree contextValues so they don't collide with other extension context menu contributions.
+// Track at: https://github.com/BitConcepts/specsmith-vscode/issues
+
 export type ItemKind = 'project' | 'governance' | 'govdoc' | 'dir' | 'file';
 
 // ── Dirs to skip in file tree ─────────────────────────────────────────────────

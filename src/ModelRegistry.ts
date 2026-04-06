@@ -3,8 +3,16 @@
 /**
  * ModelRegistry — fetches live model lists from each provider's REST API.
  *
- * Results are cached in-memory for 5 minutes so repeat opens don't
- * hammer the network. Falls back to a static list on any error.
+ * REQ-EXT-001: Model dropdowns MUST always reflect the provider's current model
+ * list via live API call on session open, with static fallback when no key is set
+ * or the API is unreachable. Provider APIs:
+ *   Anthropic: GET https://api.anthropic.com/v1/models
+ *   OpenAI:    GET https://api.openai.com/v1/models  (filter non-chat families)
+ *   Gemini:    GET https://generativelanguage.googleapis.com/v1beta/models
+ *   Mistral:   GET https://api.mistral.ai/v1/models
+ *   Ollama:    GET http://localhost:11434/api/tags
+ *
+ * Results are cached in-memory for 5 minutes.
  */
 import * as https from 'https';
 import * as http from 'http';
@@ -30,12 +38,20 @@ const STATIC: Record<string, ModelInfo[]> = {
     { id: 'claude-sonnet-4-0',  name: 'Claude Sonnet 4.0',  category: 'Previous',  contextWindow: 200000, description: 'Previous balanced' },
   ],
   openai: [
-    { id: 'gpt-4o',       name: 'GPT-4o',         category: 'Multimodal', contextWindow: 128000, description: 'Vision + text, fast' },
-    { id: 'gpt-4o-mini',  name: 'GPT-4o Mini',    category: 'Multimodal', contextWindow: 128000, description: 'Cost-efficient multimodal' },
-    { id: 'o3',           name: 'o3',             category: 'Reasoning',  contextWindow: 200000, description: 'Deep reasoning, complex tasks' },
-    { id: 'o3-mini',      name: 'o3-mini',        category: 'Reasoning',  contextWindow: 200000, description: 'Fast reasoning' },
-    { id: 'o1',           name: 'o1',             category: 'Reasoning',  contextWindow: 200000, description: 'Advanced reasoning' },
-    { id: 'gpt-4-turbo',  name: 'GPT-4 Turbo',   category: 'Previous',   contextWindow: 128000, description: 'Previous generation' },
+    // Multimodal
+    { id: 'gpt-4o',           name: 'GPT-4o',           category: 'Multimodal', contextWindow: 128000, description: 'Vision + text, fast' },
+    { id: 'gpt-4o-mini',      name: 'GPT-4o Mini',      category: 'Multimodal', contextWindow: 128000, description: 'Cost-efficient multimodal' },
+    { id: 'gpt-4.1',          name: 'GPT-4.1',          category: 'Multimodal', contextWindow: 1047576, description: 'Latest GPT-4.1, 1M ctx' },
+    { id: 'gpt-4.1-mini',     name: 'GPT-4.1 Mini',     category: 'Multimodal', contextWindow: 1047576, description: 'Fast GPT-4.1 mini' },
+    { id: 'gpt-4.1-nano',     name: 'GPT-4.1 Nano',     category: 'Multimodal', contextWindow: 1047576, description: 'Fastest, cheapest GPT-4.1' },
+    // Reasoning
+    { id: 'o4-mini',          name: 'o4-mini',          category: 'Reasoning',  contextWindow: 200000, description: 'Latest fast reasoning' },
+    { id: 'o3',               name: 'o3',               category: 'Reasoning',  contextWindow: 200000, description: 'Deep reasoning, complex tasks' },
+    { id: 'o3-mini',          name: 'o3-mini',          category: 'Reasoning',  contextWindow: 200000, description: 'Fast reasoning' },
+    { id: 'o1',               name: 'o1',               category: 'Reasoning',  contextWindow: 200000, description: 'Advanced reasoning' },
+    { id: 'o1-mini',          name: 'o1-mini',          category: 'Reasoning',  contextWindow: 128000, description: 'Lightweight reasoning' },
+    // Previous
+    { id: 'gpt-4-turbo',      name: 'GPT-4 Turbo',      category: 'Previous',   contextWindow: 128000, description: 'Previous generation' },
   ],
   gemini: [
     { id: 'gemini-2.5-pro',    name: 'Gemini 2.5 Pro',    category: 'Latest',   contextWindow: 1048576, description: '1M context, reasoning' },
@@ -94,16 +110,33 @@ async function fetchAnthropic(apiKey: string): Promise<ModelInfo[]> {
   }));
 }
 
+/** Assign category from model id for API-fetched OpenAI models. */
+function _openaiCategory(id: string): string {
+  if (/^o\d/.test(id))     { return 'Reasoning'; }
+  if (/^gpt-4o/.test(id))  { return 'Multimodal'; }
+  if (/^gpt-4/.test(id))   { return 'GPT-4'; }
+  if (/^gpt-3/.test(id))   { return 'GPT-3.5'; }
+  if (/^chatgpt/.test(id)) { return 'ChatGPT'; }
+  return 'Models';
+}
+
 async function fetchOpenAI(apiKey: string): Promise<ModelInfo[]> {
   const raw = await get('https://api.openai.com/v1/models', {
     'Authorization': `Bearer ${apiKey}`,
   });
-  const data = JSON.parse(raw) as { data?: Array<{ id: string }> };
-  // Filter to GPT/O models only
+  const data = JSON.parse(raw) as { data?: Array<{ id: string; created?: number }> };
+
+  // Exclude non-chat model families (embeddings, audio, image, legacy)
+  const EXCLUDE = /(embed|whisper|tts-|dall-e|davinci-002|babbage-002|text-moderation|text-search|text-similarity|code-search|audio-|realtime|ft:)/i;
+
   return (data.data ?? [])
-    .filter((m) => /^(gpt-|o\d|chatgpt)/i.test(m.id))
-    .sort((a, b) => a.id < b.id ? 1 : -1)
-    .map((m) => ({ id: m.id, name: m.id }));
+    .filter((m) => !EXCLUDE.test(m.id))
+    .sort((a, b) => (b.created ?? 0) - (a.created ?? 0)) // newest first
+    .map((m) => ({
+      id:       m.id,
+      name:     m.id,
+      category: _openaiCategory(m.id),
+    }));
 }
 
 async function fetchGemini(apiKey: string): Promise<ModelInfo[]> {
