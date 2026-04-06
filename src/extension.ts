@@ -477,7 +477,7 @@ function _statusIcon(status: SessionStatus): vscode.ThemeIcon {
     case 'starting': return new vscode.ThemeIcon('circle-filled', new vscode.ThemeColor('charts.yellow'));
     case 'waiting':  return new vscode.ThemeIcon('circle-filled', new vscode.ThemeColor('charts.green'));
     case 'running':  return new vscode.ThemeIcon('loading~spin');
-    case 'error':    return new vscode.ThemeIcon('circle-filled', new vscode.ThemeColor('charts.red'));
+    case 'error':    return new vscode.ThemeIcon('warning'); // triangle ⚠ — visible at a glance
     default:         return new vscode.ThemeIcon('circle-outline');
   }
 }

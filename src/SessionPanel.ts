@@ -371,7 +371,7 @@ export class SessionPanel implements vscode.Disposable {
   #mdesc{font-size:10px;color:var(--dim);max-width:160px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .hbtn{background:none;border:none;color:var(--dim);cursor:pointer;font-size:13px;padding:0 3px}
   .hbtn:hover{color:var(--teal)}
-  #chat{flex:1 1 auto;overflow-y:auto;padding:10px 12px;display:flex;flex-direction:column;gap:5px;min-height:140px}
+  #chat{flex:1 1 auto;overflow-y:auto;padding:10px 12px;display:flex;flex-direction:column;gap:5px;min-height:0}
   #chat::-webkit-scrollbar{width:5px}
   #chat::-webkit-scrollbar-thumb{background:var(--br);border-radius:3px}
   #rh{height:5px;background:var(--br);cursor:ns-resize;flex-shrink:0;transition:background .15s}
@@ -413,13 +413,13 @@ export class SessionPanel implements vscode.Disposable {
   #obn{display:none;align-items:center;gap:8px;padding:4px 10px;background:rgba(206,145,120,.1);border-top:1px solid var(--amb);font-size:11px;color:var(--amb);flex-shrink:0}
   #obn.show{display:flex}
   #obn button{background:none;border:none;color:var(--amb);cursor:pointer;font-size:13px;margin-left:auto}
-  #ibar{display:flex;flex-direction:column;gap:4px;padding:6px 10px;background:var(--sf);border-top:1px solid var(--br);flex-shrink:0}
-  #ir{display:flex;gap:5px;align-items:flex-end}
-  #it{flex:1;background:var(--ib);color:var(--if);border:1px solid var(--br);border-radius:5px;padding:6px 9px;font-family:var(--fn);font-size:13px;resize:none;min-height:38px;max-height:110px;line-height:1.4}
-  #it:focus{outline:1px solid var(--teal);border-color:var(--teal)}
+  #ibar{display:flex;flex-direction:column;gap:4px;padding:6px 10px 8px;background:var(--sf);border-top:1px solid var(--br);flex-shrink:0}
+  #ir{position:relative}
+  #it{width:100%;background:var(--ib);color:var(--if);border:1px solid var(--br);border-radius:8px;padding:9px 46px 9px 12px;font-family:var(--fn);font-size:13px;resize:none;min-height:38px;height:38px;line-height:1.45;overflow-y:auto;box-sizing:border-box;transition:border-color .15s}
+  #it:focus{outline:none;border-color:var(--teal)}
   #it:disabled{opacity:.5}
-  #mainbtn{width:40px;height:40px;border:none;border-radius:50%;background:var(--bb);color:var(--bf);cursor:pointer;font-size:18px;font-weight:700;flex-shrink:0;transition:background .15s,transform .1s;align-self:flex-end}
-  #mainbtn:hover:not(:disabled){background:var(--bh);transform:scale(1.07)}
+  #mainbtn{position:absolute;right:7px;bottom:5px;width:28px;height:28px;border:none;border-radius:50%;background:var(--bb);color:var(--bf);cursor:pointer;font-size:13px;font-weight:700;display:flex;align-items:center;justify-content:center;transition:background .15s,transform .1s;z-index:1}
+  #mainbtn:hover:not(:disabled){background:var(--bh);transform:scale(1.08)}
   #mainbtn:disabled{opacity:.45;cursor:not-allowed}
   #mainbtn.busy{background:var(--red)!important}
   #tr{display:flex;gap:4px;flex-wrap:wrap;align-items:center}
@@ -469,7 +469,7 @@ export class SessionPanel implements vscode.Disposable {
   <div id="typ"><div class="d"></div><div class="d"></div><div class="d"></div>
     <span>Agent thinking…</span></div>
   <div id="ir">
-    <textarea id="it" rows="2" placeholder="Message AEE agent… (Enter to send · Shift+Enter newline · @ file · drag/drop)"></textarea>
+    <textarea id="it" placeholder="Message AEE agent… (Enter to send · Shift+Enter newline · @ file)"></textarea>
     <button id="mainbtn" title="Send (Enter)" onclick="mainAct()">↑</button>
   </div>
   <div id="tr">
@@ -520,12 +520,17 @@ function addT(n,r,e){const d=document.createElement('div');d.className='tb'+(e?'
 function addS(m){const d=document.createElement('div');d.className='sl';d.textContent=m;C.appendChild(d);sb2()}
 /* Known specsmith error patterns → short human-friendly message */
 const ERR_MAP=[
-  [/No such command 'run'/,        'specsmith version too old — upgrade: pip install --upgrade specsmith'],
-  [/No such option.*json-events/,  'specsmith < v0.3.1 — upgrade: pip install --upgrade specsmith'],
-  [/No API key/i,                  'No API key set — Ctrl+Shift+P → specsmith: Set API Key'],
-  [/ANTHROPIC_API_KEY/,            'Anthropic API key missing — run: specsmith: Set API Key'],
-  [/OPENAI_API_KEY/,               'OpenAI API key missing — run: specsmith: Set API Key'],
-  [/Usage:.*specsmith.*COMMAND/s,  'specsmith CLI error — see details'],
+  [/No such command 'run'/,                'specsmith version too old — upgrade: Ctrl+Shift+P → specsmith: Install or Upgrade'],
+  [/No such option.*json-events/,          'specsmith < v0.3.1 — Ctrl+Shift+P → specsmith: Install or Upgrade'],
+  [/invalid_api_key|Incorrect API key/i,   'Invalid API key — reset via: Ctrl+Shift+P → specsmith: Set API Key'],
+  [/error code.*401|status.*401/i,         'Authentication failed (401) — check your API key: Ctrl+Shift+P → specsmith: Set API Key'],
+  [/Provider error.*401/i,                 'Wrong API key (401) — Ctrl+Shift+P → specsmith: Set API Key'],
+  [/No API key/i,                          'No API key set — Ctrl+Shift+P → specsmith: Set API Key'],
+  [/ANTHROPIC_API_KEY/,                    'Anthropic API key missing — Ctrl+Shift+P → specsmith: Set API Key'],
+  [/OPENAI_API_KEY/,                       'OpenAI API key missing — Ctrl+Shift+P → specsmith: Set API Key'],
+  [/GOOGLE_API_KEY/,                       'Google API key missing — Ctrl+Shift+P → specsmith: Set API Key'],
+  [/MISTRAL_API_KEY/,                      'Mistral API key missing — Ctrl+Shift+P → specsmith: Set API Key'],
+  [/Usage:.*specsmith.*COMMAND/s,          'specsmith CLI error — see details'],
 ];
 function smartErr(m){
   for(const[re,msg]of ERR_MAP){if(re.test(m))return{short:msg,long:m}}
@@ -624,12 +629,24 @@ function inj(file){const im=file.type.startsWith('image/'),tx=file.type.startsWi
   if(im){rd.onload=ev=>{const u=ev.target.result;addImg(u,file.name);const i=document.getElementById('it');i.value=\`[Image: \${file.name}]\\n\${i.value}\`};rd.readAsDataURL(file)}
   else if(tx||file.size<500000){rd.onload=ev=>{const c=ev.target.result;const p=c.length>8000?c.slice(0,8000)+'\\n…':c;const i=document.getElementById('it');i.value=\`[File: \${file.name}]\\n\\\`\\\`\\\`\\n\${p}\\n\\\`\\\`\\\`\\n\\n\${i.value}\`};rd.readAsText(file)}
   else addS(\`Cannot inject \${file.name} (binary)\`)}
-/* Resize handle */
-(()=>{const h=document.getElementById('rh'),ce=document.getElementById('chat');let dr=false,sy=0,sh=0,col=false,sv=0;
-  h.addEventListener('mousedown',e=>{dr=true;sy=e.clientY;sh=ce.getBoundingClientRect().height;h.classList.add('drag');e.preventDefault()});
-  document.addEventListener('mousemove',e=>{if(!dr)return;const d=e.clientY-sy,nh=Math.max(140,sh+d);ce.style.flex='none';ce.style.height=nh+'px'});
+/* Resize handle — controls TEXTAREA height. Drag UP = bigger textarea, drag DOWN = smaller.
+   Chat takes all remaining space (flex:1) so it auto-shrinks as textarea grows. */
+(()=>{
+  const h=document.getElementById('rh'),ta=document.getElementById('it');
+  let dr=false,sy=0,sh=0;
+  h.addEventListener('mousedown',e=>{dr=true;sy=e.clientY;sh=parseFloat(ta.style.height)||ta.getBoundingClientRect().height;h.classList.add('drag');e.preventDefault()});
+  document.addEventListener('mousemove',e=>{
+    if(!dr)return;
+    const delta=sy-e.clientY; // drag UP = positive delta = bigger textarea
+    const nh=Math.max(38,Math.min(320,sh+delta));
+    ta.style.height=nh+'px';
+  });
   document.addEventListener('mouseup',()=>{dr=false;h.classList.remove('drag')});
-  h.addEventListener('dblclick',()=>{if(col){ce.style.height=sv+'px';col=false}else{sv=ce.getBoundingClientRect().height;ce.style.flex='none';ce.style.height='140px';col=true}})})();
+  h.addEventListener('dblclick',()=>{
+    const cur=parseFloat(ta.style.height)||38;
+    ta.style.height=(cur<=42?120:38)+'px';
+  });
+})();
 /* Messages from host */
 window.addEventListener('message',({data})=>{switch(data.type){
   case 'init':if(data.provider){document.getElementById('ps').value=data.provider;popMdl(data.provider,data.models||[],data.model)}
