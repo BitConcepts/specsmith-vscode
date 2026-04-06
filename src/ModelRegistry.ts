@@ -126,8 +126,8 @@ async function fetchOpenAI(apiKey: string): Promise<ModelInfo[]> {
   });
   const data = JSON.parse(raw) as { data?: Array<{ id: string; created?: number }> };
 
-  // Exclude non-chat model families (embeddings, audio, image, legacy)
-  const EXCLUDE = /(embed|whisper|tts-|dall-e|davinci-002|babbage-002|text-moderation|text-search|text-similarity|code-search|audio-|realtime|ft:)/i;
+  // Exclude non-chat model families (embeddings, audio, image, codex, legacy)
+  const EXCLUDE = /(embed|whisper|tts-|dall-e|davinci-002|babbage-002|text-moderation|text-search|text-similarity|code-search|audio-|realtime|ft:|codex|text-davinci|text-babbage|text-ada|text-curie|code-davinci|code-cushman|computer-use|instruct)/i;
 
   return (data.data ?? [])
     .filter((m) => !EXCLUDE.test(m.id))

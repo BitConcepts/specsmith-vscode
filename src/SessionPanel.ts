@@ -164,6 +164,13 @@ export class SessionPanel implements vscode.Disposable {
     void this._panel.webview.postMessage({ type: 'system', message: `> ${cmd}` } satisfies SpecsmithEvent);
   }
 
+  /** Push a fresh model list to the webview (called after API key verification). */
+  postModels(provider: string, models: import('./types').ModelInfo[]): void {
+    if (this._config.provider === provider) {
+      void this._panel.webview.postMessage({ type: 'models', models } satisfies SpecsmithEvent);
+    }
+  }
+
   dispose(): void {
     SessionPanel._instances = SessionPanel._instances.filter((i) => i !== this);
     if (SessionPanel._current === this) {
@@ -403,8 +410,11 @@ export class SessionPanel implements vscode.Disposable {
   .ab{background:none;border:none;color:var(--dim);cursor:pointer;font-size:11px;padding:1px 4px;border-radius:3px}
   .ab:hover{color:var(--teal);background:rgba(78,201,176,.1)}
   .iprev{max-width:100%;max-height:200px;border-radius:6px;border:1px solid var(--br);margin-top:4px}
-  #dov{display:none;position:fixed;inset:0;z-index:999;background:rgba(78,201,176,.12);border:3px dashed var(--teal);border-radius:8px;align-items:center;justify-content:center;font-size:18px;color:var(--teal);pointer-events:none}
-  #dov.show{display:flex}
+  /* Drop overlay — only highlights the input bar, not the full window */
+  #ibar{display:flex;flex-direction:column;gap:4px;padding:6px 10px 8px;background:var(--sf);border-top:1px solid var(--br);flex-shrink:0;transition:border-top-color .15s,background .15s}
+  #ibar.da{border-top:2px solid var(--teal);background:rgba(78,201,176,.06)}
+  #dh{display:none;text-align:center;color:var(--teal);font-size:11px;padding:2px 0;font-style:italic}
+  #ibar.da #dh{display:block}
   #tmtr{display:flex;align-items:center;gap:8px;padding:3px 10px;background:var(--sf);border-top:1px solid var(--br);font-size:11px;color:var(--dim);flex-shrink:0}
   #ctrk{flex:1;height:4px;background:var(--br);border-radius:2px;overflow:hidden}
   #cfil{height:100%;width:0%;background:var(--grn);border-radius:2px;transition:width .4s,background .4s}
@@ -413,7 +423,6 @@ export class SessionPanel implements vscode.Disposable {
   #obn{display:none;align-items:center;gap:8px;padding:4px 10px;background:rgba(206,145,120,.1);border-top:1px solid var(--amb);font-size:11px;color:var(--amb);flex-shrink:0}
   #obn.show{display:flex}
   #obn button{background:none;border:none;color:var(--amb);cursor:pointer;font-size:13px;margin-left:auto}
-  #ibar{display:flex;flex-direction:column;gap:4px;padding:6px 10px 8px;background:var(--sf);border-top:1px solid var(--br);flex-shrink:0}
   #ir{position:relative}
   #it{width:100%;background:var(--ib);color:var(--if);border:1px solid var(--br);border-radius:8px;padding:9px 46px 9px 12px;font-family:var(--fn);font-size:13px;resize:none;min-height:38px;height:38px;line-height:1.45;overflow-y:auto;box-sizing:border-box;transition:border-color .15s}
   #it:focus{outline:none;border-color:var(--teal)}
@@ -436,7 +445,6 @@ export class SessionPanel implements vscode.Disposable {
 </style>
 </head>
 <body>
-<div id="dov">📎 Drop files to inject as context</div>
 <div id="pbar">
   <span style="opacity:.7;cursor:pointer" onclick="openProj()">📁</span>
   <span class="dlbl" id="dlbl" title="" onclick="openProj()">.</span>
@@ -456,7 +464,7 @@ export class SessionPanel implements vscode.Disposable {
   <button class="hbtn" title="Export chat" onclick="exportChat()">⬇</button>
   <button class="hbtn" title="Help" onclick="vscode.postMessage({command:'openFile',filePath:''})">❓</button>
 </div>
-<div id="chat" ondragover="dvr(event)" ondragleave="dlv()" ondrop="ddp(event)"></div>
+<div id="chat"></div>
 <div id="rh" title="Drag · Dbl-click collapse"></div>
 <div id="obn"><span>⚠</span><span id="obt">Context high</span>
   <button onclick="document.getElementById('obn').classList.remove('show')">✕</button></div>
@@ -466,6 +474,7 @@ export class SessionPanel implements vscode.Disposable {
   <span id="cpct">0%</span><span id="tcnt">0+0</span><span id="tcst">$0.0000</span>
 </div>
 <div id="ibar">
+  <div id="dh">📎 Drop files to inject as context</div>
   <div id="typ"><div class="d"></div><div class="d"></div><div class="d"></div>
     <span>Agent thinking…</span></div>
   <div id="ir">
@@ -616,13 +625,24 @@ function updDesc(){const s=document.getElementById('ms'),o=s.options[s.selectedI
 document.getElementById('ps').addEventListener('change',e=>{const p=e.target.value;
   vscode.postMessage({command:'setProvider',provider:p});vscode.postMessage({command:'getModels',provider:p})});
 document.getElementById('ms').addEventListener('change',e=>{curMdl=e.target.value;updDesc();vscode.postMessage({command:'setModel',model:curMdl})});
-/* Drag and drop */
-let dc=0;
-document.addEventListener('dragenter',()=>{dc++;document.getElementById('dov').classList.add('show')});
-document.addEventListener('dragleave',()=>{if(--dc<=0){dc=0;document.getElementById('dov').classList.remove('show')}});
-function dvr(e){e.preventDefault()}function dlv(){}
-function ddp(e){e.preventDefault();dc=0;document.getElementById('dov').classList.remove('show');
-  const f=e.dataTransfer?.files;if(f)for(const fi of f)inj(fi)}
+/* Drag and drop — uses dragover polling (reliable; no stuck-overlay bug) */
+const _IB=document.getElementById('ibar');let _dt;
+function _dsh(){_IB.classList.add('da')}
+function _dhd(){clearTimeout(_dt);_IB.classList.remove('da')}
+document.addEventListener('dragover',e=>{
+  e.preventDefault();
+  _dsh();
+  clearTimeout(_dt);
+  _dt=setTimeout(_dhd,400); // auto-hide if drag stops/leaves without drop
+});
+document.addEventListener('drop',e=>{
+  e.preventDefault();_dhd();
+  const f=e.dataTransfer?.files;if(f)for(const fi of f)inj(fi);
+});
+document.addEventListener('dragleave',e=>{
+  // Only hide when cursor leaves the entire document (not just an element)
+  if(!e.relatedTarget||e.relatedTarget===document.documentElement)_dhd();
+});
 /* Paste images */
 document.addEventListener('paste',e=>{const items=e.clipboardData?.items||[];for(const it of items){if(it.type.startsWith('image/')){const f=it.getAsFile();if(f){e.preventDefault();inj(f)}}}});
 function inj(file){const im=file.type.startsWith('image/'),tx=file.type.startsWith('text/')||/\\.(md|txt|py|ts|js|json|yaml|yml|toml|sh|go|rs|c|cpp|h|cs|java)$/i.test(file.name);const rd=new FileReader();

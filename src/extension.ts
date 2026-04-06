@@ -13,6 +13,7 @@ import {
 import { EpistemicBar } from './EpistemicBar';
 import { ApiKeyManager } from './ApiKeyManager';
 import { showHelp } from './HelpPanel';
+import { fetchModels } from './ModelRegistry';
 import { SessionStatus } from './types';
 
 // ── Activation ────────────────────────────────────────────────────────────────
@@ -200,8 +201,10 @@ export function activate(context: vscode.ExtensionContext): void {
   // ── Commands: API keys ───────────────────────────────────────────────────
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('specsmith.setApiKey', () => {
-      void ApiKeyManager.promptSetKey(context.secrets);
+    vscode.commands.registerCommand('specsmith.setApiKey', async () => {
+      await ApiKeyManager.promptSetKey(context.secrets);
+      // After saving, verify the key and broadcast fresh model list to open sessions
+      void _verifyAndBroadcast(context);
     }),
     vscode.commands.registerCommand('specsmith.clearApiKey', () => {
       void ApiKeyManager.promptClearKey(context.secrets);
@@ -210,6 +213,10 @@ export function activate(context: vscode.ExtensionContext): void {
       void ApiKeyManager.showStatus(context.secrets);
     }),
   );
+
+  // Startup: fetch models in background for all configured providers
+  // so dropdowns are populated before the user opens their first session
+  void _startupFetchModels(context);
 
   // ── Commands: specsmith tools ────────────────────────────────────────────
 
@@ -449,6 +456,49 @@ function _shellPath(): string | undefined {
     return process.env.ComSpec ?? 'powershell.exe';
   }
   return process.env.SHELL;
+}
+
+/**
+ * After an API key is set: verify it against the provider's models API,
+ * show a notification, and push fresh models to all open session panels.
+ */
+async function _verifyAndBroadcast(context: vscode.ExtensionContext): Promise<void> {
+  const PROVIDERS = ['anthropic', 'openai', 'gemini', 'mistral'] as const;
+  for (const prov of PROVIDERS) {
+    const key = await ApiKeyManager.getKey(context.secrets, prov);
+    if (!key) { continue; }
+    try {
+      const models = await fetchModels(prov, key);
+      if (models.length > 0) {
+        void vscode.window.showInformationMessage(
+          `✓ ${prov} API key verified — ${models.length} models available`,
+        );
+        // Push to any open session using this provider
+        for (const panel of SessionPanel.all()) {
+          panel.postModels(prov, models);
+        }
+      } else {
+        void vscode.window.showWarningMessage(`${prov}: key accepted but no models returned`);
+      }
+    } catch (err) {
+      void vscode.window.showWarningMessage(
+        `${prov}: could not verify API key — ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+}
+
+/** Silently warm the model cache at extension startup for all configured providers. */
+async function _startupFetchModels(context: vscode.ExtensionContext): Promise<void> {
+  // Delay so we don't slow down extension activation
+  await new Promise((r) => setTimeout(r, 2000));
+  const PROVIDERS = ['anthropic', 'openai', 'gemini', 'mistral'] as const;
+  for (const prov of PROVIDERS) {
+    const key = await ApiKeyManager.getKey(context.secrets, prov);
+    if (key) {
+      try { await fetchModels(prov, key); } catch { /* warm cache only, ignore errors */ }
+    }
+  }
 }
 
 function _findReqFile(projectDir: string): string | undefined {
