@@ -10,6 +10,7 @@
  *                          tokens, turn_done, error, system
  */
 import * as cp from 'child_process';
+import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as readline from 'readline';
@@ -27,12 +28,24 @@ function augmentedEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   if (process.platform === 'win32') {
     const local = process.env.LOCALAPPDATA ?? path.join(os.homedir(), 'AppData', 'Local');
     const roaming = process.env.APPDATA ?? path.join(os.homedir(), 'AppData', 'Roaming');
+    // Standard locations
     extra.push(
       path.join(local,   'pipx', 'bin'),                    // pipx default on Windows
       path.join(local,   'Programs', 'Python', 'Scripts'),  // pip user (Python 3.11+)
       path.join(roaming, 'Python', 'Scripts'),              // pip user (older Python)
       path.join(os.homedir(), '.local', 'bin'),             // alternate pipx location
     );
+    // Glob pythoncore-* subdirectories under %LOCALAPPDATA%\Python (non-store Python installs)
+    try {
+      const pyBase = path.join(local, 'Python');
+      if (fs.existsSync(pyBase)) {
+        for (const entry of fs.readdirSync(pyBase, { withFileTypes: true })) {
+          if (entry.isDirectory() && entry.name.startsWith('pythoncore')) {
+            extra.push(path.join(pyBase, entry.name, 'Scripts'));
+          }
+        }
+      }
+    } catch { /* ignore */ }
   } else {
     // macOS / Linux
     extra.push(
@@ -116,6 +129,12 @@ export class SpecsmithBridge {
   // ── Messaging ───────────────────────────────────────────────
 
   public send(text: string): void {
+    // Auto-respawn the agent process if it has died
+    if (!this._proc) {
+      const ts = new Date().toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      this._emit({ type: 'system', message: `[${ts}] Respawning agent…` });
+      this._spawn();
+    }
     this._setStatus('running');
     this._startTurnTimer();
     if (this._ready) {
@@ -210,16 +229,33 @@ export class SpecsmithBridge {
 
     this._proc.stderr?.on('data', (chunk: Buffer) => {
       const text = chunk.toString().trim();
-      if (text) { this._emit({ type: 'system', message: `[stderr] ${text}` }); }
+      if (!text) { return; }
+      // Detect critical errors in stderr and surface as proper error events
+      if (/No such option.*json-events/i.test(text)) {
+        this._emit({ type: 'error',
+          message: 'specsmith v0.3.1+ required (missing --json-events)\nUpgrade: Ctrl+Shift+P → specsmith: Install or Upgrade' });
+      } else if (/No such command.*run/i.test(text)) {
+        this._emit({ type: 'error',
+          message: 'specsmith v0.3.0+ required (missing \'run\' command)\nUpgrade: Ctrl+Shift+P → specsmith: Install or Upgrade' });
+      } else if (/Error:/i.test(text) || /error:/i.test(text)) {
+        // Stderr lines that are errors — emit as error type
+        this._emit({ type: 'error', message: text });
+      } else {
+        this._emit({ type: 'system', message: text });
+      }
     });
 
     this._proc.on('exit', (code, signal) => {
       this._ready = false;
+      this._proc = null; // Mark as dead so send() can auto-respawn
       this._clearTurnTimer();
-      this._setStatus('inactive');
+      const isError = (code !== 0 && code !== null) || signal !== null;
+      this._setStatus(isError ? 'error' : 'inactive');
+      const ts = new Date().toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });
       const reason = signal ? `signal ${signal}` : `exit code ${code ?? '?'}`;
-      this._emit({ type: 'system', message: `Agent process ended (${reason})` });
-      this._emit({ type: 'turn_done' }); // unblock any waiting UI
+      this._emit({ type: isError ? 'error' : 'system',
+        message: `[${ts}] Agent process ended (${reason})${isError ? ' — send a message to restart' : ''}` });
+      this._emit({ type: 'turn_done' });
     });
 
     this._proc.on('error', (err: NodeJS.ErrnoException) => {

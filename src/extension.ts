@@ -465,7 +465,8 @@ class SessionItem extends vscode.TreeItem {
   constructor(public readonly panel: SessionPanel) {
     super(panel.label, vscode.TreeItemCollapsibleState.None);
     this.contextValue = 'session';
-    this.tooltip      = panel.projectDir;
+    this.tooltip      = `${panel.projectDir}\nStarted: ${panel.startTime}`;
+    this.description  = panel.startTime;
     this.iconPath     = _statusIcon(panel.status);
     this.command      = { command: 'specsmith.newSessionFromProject', title: 'Focus', arguments: [] };
   }

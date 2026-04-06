@@ -151,6 +151,13 @@ export class SessionPanel implements vscode.Disposable {
   get label(): string { return `${path.basename(this._config.projectDir)} [${this._config.provider}]`; }
   get projectDir(): string { return this._config.projectDir; }
   get status(): SessionStatus { return this._status; }
+  get startTime(): string {
+    const ts = parseInt(this._config.sessionId, 10);
+    return isNaN(ts) ? '' : new Date(ts).toLocaleString([], {
+      month: 'short', day: 'numeric',
+      hour: '2-digit', minute: '2-digit',
+    });
+  }
 
   sendCommand(cmd: string): void {
     this._bridge.send(cmd);
@@ -482,7 +489,7 @@ const vscode=acquireVsCodeApi();
 let curMdl='',busy=false,warned=false,lastU='';
 const CTX={claude:200000,'gpt-4o':128000,o1:200000,o3:200000,gemini:1000000,mistral:128000};
 function csize(m){const l=(m||'').toLowerCase();for(const[k,v]of Object.entries(CTX))if(l.includes(k))return v;return 128000}
-function ts(){return new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}
+function ts(){return new Date().toLocaleString([],{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit'})}
 function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
 function rmd(r){
   let s=esc(r);
