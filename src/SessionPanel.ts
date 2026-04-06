@@ -1,17 +1,28 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 BitConcepts, LLC. All rights reserved.
-/**
- * SessionPanel — one WebviewPanel per agent session.
- *
- * Each panel owns a SpecsmithBridge (child process). The embedded HTML
- * UI communicates with the extension host via postMessage in both directions.
- */
 import * as vscode from 'vscode';
 import * as path from 'path';
+import * as fs from 'fs';
 import { SpecsmithBridge } from './bridge';
-import { SpecsmithEvent, WebviewMessage, SessionConfig } from './types';
+import { SpecsmithEvent, WebviewMessage, SessionConfig, SessionStatus } from './types';
+import { ApiKeyManager } from './ApiKeyManager';
+import { fetchModels, getStaticModels } from './ModelRegistry';
 
-// ── Session registry ────────────────────────────────────────────────────────
+// ── Static status listener registry ──────────────────────────────────────────
+type StatusListener = (panel: SessionPanel, status: SessionStatus) => void;
+const _statusListeners: StatusListener[] = [];
+
+export function onSessionStatusChange(fn: StatusListener): vscode.Disposable {
+  _statusListeners.push(fn);
+  return {
+    dispose: () => {
+      const i = _statusListeners.indexOf(fn);
+      if (i >= 0) { _statusListeners.splice(i, 1); }
+    },
+  };
+}
+
+// ── Panel registry ────────────────────────────────────────────────────────────
 
 export class SessionPanel implements vscode.Disposable {
   private static _instances: SessionPanel[] = [];
@@ -20,51 +31,38 @@ export class SessionPanel implements vscode.Disposable {
   private readonly _panel: vscode.WebviewPanel;
   private readonly _bridge: SpecsmithBridge;
   private _config: SessionConfig;
+  private _status: SessionStatus = 'starting';
   private _disposables: vscode.Disposable[] = [];
+  private readonly _secrets: vscode.SecretStorage;
 
-  // ── Static factory ─────────────────────────────────────────────────────────
+  // ── Factory (async — awaits SecretStorage for API keys) ───────────────────
 
-  public static create(
+  static async create(
     context: vscode.ExtensionContext,
     projectDir: string,
     provider: string,
     model: string,
-  ): SessionPanel {
-    const cfg = vscode.workspace.getConfiguration('specsmith');
+  ): Promise<SessionPanel> {
+    const cfg      = vscode.workspace.getConfiguration('specsmith');
     const execPath = cfg.get<string>('executablePath', 'specsmith');
-    const config: SessionConfig = {
-      projectDir,
-      provider,
-      model,
-      sessionId: Date.now().toString(),
-    };
+    const envOverrides = await ApiKeyManager.getAllEnv(context.secrets);
 
+    const config: SessionConfig = { projectDir, provider, model, sessionId: Date.now().toString() };
     const panel = vscode.window.createWebviewPanel(
       'specsmithSession',
       `🧠 ${path.basename(projectDir)}`,
       vscode.ViewColumn.One,
-      {
-        enableScripts: true,
-        retainContextWhenHidden: true,
-        localResourceRoots: [],
-      },
+      { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [] },
     );
 
-    const instance = new SessionPanel(panel, config, execPath);
-    SessionPanel._instances.push(instance);
-    SessionPanel._current = instance;
-    return instance;
+    const inst = new SessionPanel(panel, config, execPath, envOverrides, context.secrets);
+    SessionPanel._instances.push(inst);
+    SessionPanel._current = inst;
+    return inst;
   }
 
-  /** Return the most-recently-active session panel, if any. */
-  public static current(): SessionPanel | undefined {
-    return SessionPanel._current;
-  }
-
-  /** All open sessions (for the Sessions tree view). */
-  public static all(): SessionPanel[] {
-    return [...SessionPanel._instances];
-  }
+  static current(): SessionPanel | undefined { return SessionPanel._current; }
+  static all(): SessionPanel[] { return [...SessionPanel._instances]; }
 
   // ── Constructor ────────────────────────────────────────────────────────────
 
@@ -72,713 +70,414 @@ export class SessionPanel implements vscode.Disposable {
     panel: vscode.WebviewPanel,
     config: SessionConfig,
     execPath: string,
+    envOverrides: Record<string, string>,
+    secrets: vscode.SecretStorage,
   ) {
-    this._panel = panel;
-    this._config = config;
-    this._bridge = new SpecsmithBridge(execPath, config);
+    this._panel   = panel;
+    this._config  = config;
+    this._secrets = secrets;
+    this._bridge  = new SpecsmithBridge(execPath, config, envOverrides);
 
     this._panel.webview.html = this._html();
 
-    // Bridge → webview
-    this._bridge.onEvent((event: SpecsmithEvent) => {
-      void this._panel.webview.postMessage(event);
+    this._bridge.onEvent((e: SpecsmithEvent) => { void this._panel.webview.postMessage(e); });
+    this._bridge.onStatus((s: SessionStatus) => {
+      this._status = s;
+      for (const fn of _statusListeners) { try { fn(this, s); } catch { /* noop */ } }
     });
 
-    // Webview → extension host
     this._panel.webview.onDidReceiveMessage(
-      (msg: WebviewMessage) => this._onMessage(msg),
-      null,
-      this._disposables,
+      (msg: WebviewMessage) => this._onMsg(msg), null, this._disposables,
     );
-
     this._panel.onDidDispose(() => this.dispose(), null, this._disposables);
     this._panel.onDidChangeViewState((e) => {
-      if (e.webviewPanel.active) {
-        SessionPanel._current = this;
-      }
+      if (e.webviewPanel.active) { SessionPanel._current = this; }
+    }, null, this._disposables);
+
+    // Re-read keys if they change while the session is open
+    secrets.onDidChange(async () => {
+      const env = await ApiKeyManager.getAllEnv(secrets);
+      this._bridge.setEnvOverrides(env);
     }, null, this._disposables);
   }
 
   // ── Public API ─────────────────────────────────────────────────────────────
 
-  public get label(): string {
-    return `${path.basename(this._config.projectDir)} [${this._config.provider}]`;
-  }
+  get label(): string { return `${path.basename(this._config.projectDir)} [${this._config.provider}]`; }
+  get projectDir(): string { return this._config.projectDir; }
+  get status(): SessionStatus { return this._status; }
 
-  public get projectDir(): string {
-    return this._config.projectDir;
-  }
-
-  /** Send a text command to the agent (e.g. from a toolbar button). */
-  public sendCommand(cmd: string): void {
+  sendCommand(cmd: string): void {
     this._bridge.send(cmd);
-    // Echo to chat
-    void this._panel.webview.postMessage({ type: 'system', message: `> ${cmd}` });
+    void this._panel.webview.postMessage({ type: 'system', message: `> ${cmd}` } satisfies SpecsmithEvent);
   }
 
-  public dispose(): void {
+  dispose(): void {
     SessionPanel._instances = SessionPanel._instances.filter((i) => i !== this);
     if (SessionPanel._current === this) {
       SessionPanel._current = SessionPanel._instances[SessionPanel._instances.length - 1];
     }
+    this._status = 'inactive';
+    for (const fn of _statusListeners) { try { fn(this, 'inactive'); } catch { /* noop */ } }
     this._bridge.dispose();
     this._panel.dispose();
-    while (this._disposables.length > 0) {
-      this._disposables.pop()?.dispose();
-    }
+    while (this._disposables.length > 0) { this._disposables.pop()?.dispose(); }
   }
 
   // ── Message handler ────────────────────────────────────────────────────────
 
-  private _onMessage(msg: WebviewMessage): void {
+  private _onMsg(msg: WebviewMessage): void {
     switch (msg.command) {
       case 'ready':
-        // Webview is ready — send initial config and start the bridge
         void this._panel.webview.postMessage({
-          type: 'init',
-          provider: this._config.provider,
-          model:    this._config.model,
-          projectDir: this._config.projectDir,
+          type: 'init', provider: this._config.provider,
+          model: this._config.model, projectDir: this._config.projectDir,
+          models: getStaticModels(this._config.provider),
         } satisfies SpecsmithEvent);
         this._bridge.start();
+        void this._refreshModels(this._config.provider);
         break;
 
       case 'send':
-        if (msg.text) {
-          this._bridge.send(msg.text);
-        }
+        if (msg.text) { this._bridge.send(msg.text); }
+        break;
+
+      case 'stop':
+        this._bridge.kill();
         break;
 
       case 'setProvider':
         if (msg.provider) {
           this._config.provider = msg.provider;
-          this._bridge.restart(this._config);
+          void ApiKeyManager.getAllEnv(this._secrets).then((env) => {
+            this._bridge.restart(this._config, env);
+          });
+          void this._refreshModels(msg.provider);
         }
         break;
 
       case 'setModel':
-        if (msg.model) {
-          this._bridge.setModel(msg.model);
-          this._config.model = msg.model;
+        if (msg.model) { this._bridge.setModel(msg.model); this._config.model = msg.model; }
+        break;
+
+      case 'getModels':
+        if (msg.provider) { void this._refreshModels(msg.provider); }
+        break;
+
+      case 'pickFile':
+        void vscode.window.showOpenDialog({
+          canSelectMany: false, canSelectFiles: true, canSelectFolders: false,
+          defaultUri: vscode.Uri.file(this._config.projectDir),
+          title: 'Inject a file as context',
+        }).then((uris) => {
+          if (!uris?.[0]) { return; }
+          const fp = uris[0].fsPath;
+          const fn = path.basename(fp);
+          const ext = path.extname(fp).toLowerCase();
+          const imgs = new Set(['.png','.jpg','.jpeg','.gif','.webp','.bmp','.svg']);
+          if (imgs.has(ext)) {
+            const b64  = fs.readFileSync(fp).toString('base64');
+            const mime = ext === '.svg' ? 'image/svg+xml' : `image/${ext.slice(1)}`;
+            void this._panel.webview.postMessage({
+              type: 'file_picked', fileName: fn, isImage: true,
+              dataUrl: `data:${mime};base64,${b64}`,
+            } satisfies SpecsmithEvent);
+          } else {
+            try {
+              const content = fs.readFileSync(fp, 'utf8');
+              void this._panel.webview.postMessage({
+                type: 'file_picked', fileName: fn, isImage: false,
+                fileContent: content.slice(0, 50000),
+              } satisfies SpecsmithEvent);
+            } catch {
+              void this._panel.webview.postMessage({
+                type: 'system', message: `Cannot read ${fn} as text`,
+              } satisfies SpecsmithEvent);
+            }
+          }
+        });
+        break;
+
+      case 'exportChat':
+        if (msg.markdown) {
+          void vscode.window.showSaveDialog({
+            defaultUri: vscode.Uri.file(
+              path.join(this._config.projectDir, `chat-${Date.now()}.md`),
+            ),
+            filters: { Markdown: ['md'] },
+            title: 'Export Chat As…',
+          }).then((uri) => {
+            if (uri) {
+              fs.writeFileSync(uri.fsPath, msg.markdown!);
+              void vscode.window.showInformationMessage(`Chat exported to ${uri.fsPath}`);
+            }
+          });
         }
+        break;
+
+      case 'openFile':
+        if (msg.filePath) { void vscode.window.showTextDocument(vscode.Uri.file(msg.filePath)); }
         break;
     }
   }
 
+  private async _refreshModels(provider: string): Promise<void> {
+    const key    = await ApiKeyManager.getKey(this._secrets, provider);
+    const models = await fetchModels(provider, key);
+    void this._panel.webview.postMessage({ type: 'models', models } satisfies SpecsmithEvent);
+  }
+
   // ── Webview HTML ───────────────────────────────────────────────────────────
 
+  // eslint-disable-next-line max-lines-per-function
   private _html(): string {
+    // NOTE: template literal escaping — JS regex backslashes doubled, template
+    // literal backticks escaped with backslash inside the outer template.
     return /* html */`<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy"
-  content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';">
+  content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data: 'unsafe-inline';">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>specsmith Agent</title>
+<title>specsmith</title>
 <style>
-  /* ── Variables ── */
-  :root {
-    --bg:       var(--vscode-editor-background, #1e1e2e);
-    --fg:       var(--vscode-editor-foreground, #cdd6f4);
-    --surface:  var(--vscode-panel-background, #181825);
-    --border:   var(--vscode-panel-border, #313244);
-    --input-bg: var(--vscode-input-background, #1e1e2e);
-    --input-fg: var(--vscode-input-foreground, #cdd6f4);
-    --btn-bg:   var(--vscode-button-background, #1e66f5);
-    --btn-fg:   var(--vscode-button-foreground, #ffffff);
-    --btn-hover:var(--vscode-button-hoverBackground, #1e5cd5);
-    --teal:     #4ec9b0;
-    --amber:    #ce9178;
-    --red:      #f44747;
-    --green:    #4ec94e;
-    --dim:      var(--vscode-descriptionForeground, #7f849c);
-    --font:     var(--vscode-font-family, 'Segoe UI', system-ui, sans-serif);
-    --mono:     var(--vscode-editor-font-family, 'Cascadia Code', 'Fira Code', monospace);
-  }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  html, body { height: 100%; overflow: hidden; }
-  body {
-    background: var(--bg);
-    color: var(--fg);
-    font-family: var(--font);
-    font-size: 13px;
-    display: flex;
-    flex-direction: column;
-  }
-
-  /* ── Provider bar ── */
-  #provider-bar {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 5px 10px;
-    background: var(--surface);
-    border-bottom: 1px solid var(--border);
-    font-size: 11px;
-    flex-shrink: 0;
-  }
-  #provider-bar select {
-    background: var(--input-bg);
-    color: var(--input-fg);
-    border: 1px solid var(--border);
-    border-radius: 3px;
-    padding: 2px 5px;
-    font-size: 11px;
-    font-family: var(--font);
-  }
-  #provider-bar select:focus { outline: 1px solid var(--teal); }
-  .dir-label {
-    color: var(--dim);
-    max-width: 220px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-family: var(--mono);
-    font-size: 11px;
-  }
-  .bar-sep { color: var(--border); margin: 0 2px; }
-
-  /* ── Chat area ── */
-  #chat {
-    flex: 1;
-    overflow-y: auto;
-    padding: 12px 14px;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    scroll-behavior: smooth;
-  }
-  #chat::-webkit-scrollbar { width: 5px; }
-  #chat::-webkit-scrollbar-track { background: transparent; }
-  #chat::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-
-  /* ── Messages ── */
-  .msg-user {
-    align-self: flex-end;
-    max-width: 75%;
-  }
-  .msg-user .bubble {
-    background: var(--btn-bg);
-    color: var(--btn-fg);
-    border-radius: 14px 14px 3px 14px;
-    padding: 9px 13px;
-    line-height: 1.55;
-    white-space: pre-wrap;
-    word-break: break-word;
-    font-size: 13px;
-  }
-  .msg-user .meta { text-align: right; }
-
-  .msg-assistant { align-self: flex-start; max-width: 92%; }
-  .role-tag {
-    font-size: 10px;
-    color: var(--teal);
-    font-weight: 700;
-    letter-spacing: 0.6px;
-    text-transform: uppercase;
-    margin-bottom: 3px;
-  }
-  .msg-assistant .bubble {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 3px 14px 14px 14px;
-    padding: 9px 13px;
-    line-height: 1.55;
-    white-space: pre-wrap;
-    word-break: break-word;
-    font-size: 13px;
-  }
-
-  .meta {
-    font-size: 10px;
-    color: var(--dim);
-    margin-top: 3px;
-    padding: 0 2px;
-  }
-
-  .tool-block {
-    align-self: flex-start;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-left: 3px solid var(--amber);
-    border-radius: 4px;
-    padding: 6px 10px;
-    max-width: 92%;
-    font-size: 12px;
-  }
-  .tool-block.is-error { border-left-color: var(--red); }
-  .tool-header {
-    color: var(--amber);
-    font-weight: 600;
-    font-family: var(--mono);
-    margin-bottom: 3px;
-  }
-  .tool-block.is-error .tool-header { color: var(--red); }
-  .tool-result {
-    color: var(--dim);
-    font-family: var(--mono);
-    font-size: 11px;
-    max-height: 110px;
-    overflow: hidden;
-    white-space: pre-wrap;
-    word-break: break-all;
-  }
-
-  .system-line {
-    align-self: center;
-    color: var(--dim);
-    font-size: 11px;
-    font-style: italic;
-    text-align: center;
-    padding: 2px 4px;
-  }
-  .error-line {
-    align-self: flex-start;
-    color: var(--red);
-    font-size: 12px;
-    background: rgba(244,71,71,0.08);
-    border-left: 3px solid var(--red);
-    border-radius: 3px;
-    padding: 5px 10px;
-    max-width: 92%;
-  }
-
-  /* Inline code / code blocks inside assistant bubbles */
-  code {
-    font-family: var(--mono);
-    background: rgba(255,255,255,0.07);
-    padding: 1px 5px;
-    border-radius: 3px;
-    font-size: 12px;
-    color: var(--teal);
-  }
-  pre {
-    background: rgba(0,0,0,0.25);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    padding: 8px 10px;
-    overflow-x: auto;
-    font-size: 11px;
-    margin: 4px 0;
-  }
-  pre code { background: none; padding: 0; }
-
-  /* ── Token meter ── */
-  #token-meter {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 4px 10px;
-    background: var(--surface);
-    border-top: 1px solid var(--border);
-    font-size: 11px;
-    color: var(--dim);
-    flex-shrink: 0;
-  }
-  #ctx-track {
-    flex: 1;
-    height: 4px;
-    background: var(--border);
-    border-radius: 2px;
-    overflow: hidden;
-  }
-  #ctx-fill {
-    height: 100%;
-    width: 0%;
-    background: var(--green);
-    border-radius: 2px;
-    transition: width 0.4s ease, background 0.4s ease;
-  }
-  #ctx-pct  { min-width: 30px; text-align: right; }
-  #tok-cnt  { min-width: 80px; }
-  #tok-cost { color: var(--teal); font-weight: 600; }
-
-  /* ── Optimize banner ── */
-  #opt-banner {
-    display: none;
-    align-items: center;
-    gap: 8px;
-    padding: 5px 10px;
-    background: rgba(206,145,120,0.1);
-    border-top: 1px solid var(--amber);
-    font-size: 11px;
-    color: var(--amber);
-    flex-shrink: 0;
-  }
-  #opt-banner.show { display: flex; }
-  #opt-banner button {
-    background: none; border: none; color: var(--amber);
-    cursor: pointer; font-size: 13px; padding: 0 3px; margin-left: auto;
-  }
-
-  /* ── Input bar ── */
-  #input-bar {
-    display: flex;
-    flex-direction: column;
-    gap: 5px;
-    padding: 7px 10px;
-    background: var(--surface);
-    border-top: 1px solid var(--border);
-    flex-shrink: 0;
-  }
-  #input-row { display: flex; gap: 6px; align-items: flex-end; }
-  #input-text {
-    flex: 1;
-    background: var(--input-bg);
-    color: var(--input-fg);
-    border: 1px solid var(--border);
-    border-radius: 5px;
-    padding: 7px 10px;
-    font-family: var(--font);
-    font-size: 13px;
-    resize: none;
-    min-height: 38px;
-    max-height: 110px;
-    line-height: 1.4;
-  }
-  #input-text:focus { outline: 1px solid var(--teal); border-color: var(--teal); }
-  #input-text:disabled { opacity: 0.5; }
-  #send-btn {
-    background: var(--btn-bg);
-    color: var(--btn-fg);
-    border: none;
-    border-radius: 5px;
-    padding: 7px 14px;
-    cursor: pointer;
-    font-size: 12px;
-    font-weight: 600;
-    white-space: nowrap;
-    height: 38px;
-  }
-  #send-btn:hover:not(:disabled) { background: var(--btn-hover); }
-  #send-btn:disabled { opacity: 0.45; cursor: not-allowed; }
-
-  #tools-row { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; }
-  .tool-btn {
-    background: none;
-    border: 1px solid var(--border);
-    border-radius: 3px;
-    color: var(--dim);
-    padding: 1px 7px;
-    cursor: pointer;
-    font-size: 10px;
-    font-family: var(--font);
-    transition: border-color 0.15s, color 0.15s;
-  }
-  .tool-btn:hover:not(:disabled) { border-color: var(--teal); color: var(--teal); }
-  .tool-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-  .kbd-hint { font-size: 10px; color: var(--dim); margin-left: auto; }
-
-  /* ── Typing dots ── */
-  #typing { display: none; gap: 5px; align-items: center; color: var(--teal); font-size: 11px; }
-  #typing.show { display: flex; }
-  .dot {
-    width: 5px; height: 5px; background: var(--teal);
-    border-radius: 50%; animation: bounce 1.1s infinite;
-  }
-  .dot:nth-child(2) { animation-delay: 0.18s; }
-  .dot:nth-child(3) { animation-delay: 0.36s; }
-  @keyframes bounce {
-    0%,60%,100% { transform: translateY(0); }
-    30% { transform: translateY(-5px); }
-  }
+  :root{--bg:var(--vscode-editor-background,#1e1e2e);--fg:var(--vscode-editor-foreground,#cdd6f4);--sf:var(--vscode-panel-background,#181825);--br:var(--vscode-panel-border,#313244);--ib:var(--vscode-input-background,#1e1e2e);--if:var(--vscode-input-foreground,#cdd6f4);--bb:var(--vscode-button-background,#1e66f5);--bf:var(--vscode-button-foreground,#fff);--bh:var(--vscode-button-hoverBackground,#1e5cd5);--teal:#4ec9b0;--amb:#ce9178;--red:#f44747;--grn:#4ec94e;--dim:var(--vscode-descriptionForeground,#7f849c);--fn:var(--vscode-font-family,'Segoe UI',system-ui,sans-serif);--mn:var(--vscode-editor-font-family,'Cascadia Code',monospace)}
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;overflow:hidden}
+  body{background:var(--bg);color:var(--fg);font-family:var(--fn);font-size:13px;display:flex;flex-direction:column}
+  #pbar{display:flex;align-items:center;gap:7px;padding:4px 10px;background:var(--sf);border-bottom:1px solid var(--br);font-size:11px;flex-shrink:0}
+  #pbar select{background:var(--ib);color:var(--if);border:1px solid var(--br);border-radius:3px;padding:2px 4px;font-size:11px;font-family:var(--fn)}
+  #pbar select:focus{outline:1px solid var(--teal)}
+  .dlbl{color:var(--dim);max-width:190px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--mn);font-size:11px;cursor:pointer}
+  .dlbl:hover{color:var(--teal)}
+  .bsep{color:var(--br)}
+  #mdesc{font-size:10px;color:var(--dim);max-width:160px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .hbtn{background:none;border:none;color:var(--dim);cursor:pointer;font-size:13px;padding:0 3px}
+  .hbtn:hover{color:var(--teal)}
+  #chat{flex:1 1 auto;overflow-y:auto;padding:10px 12px;display:flex;flex-direction:column;gap:5px;min-height:80px}
+  #chat::-webkit-scrollbar{width:5px}
+  #chat::-webkit-scrollbar-thumb{background:var(--br);border-radius:3px}
+  #rh{height:5px;background:var(--br);cursor:ns-resize;flex-shrink:0;transition:background .15s}
+  #rh:hover,#rh.drag{background:var(--teal)}
+  .mu{align-self:flex-end;max-width:76%;position:relative}
+  .mu .bbl{background:var(--bb);color:var(--bf);border-radius:14px 14px 3px 14px;padding:8px 12px;line-height:1.55;white-space:pre-wrap;word-break:break-word}
+  .mu .mt{text-align:right;font-size:10px;color:var(--dim);margin-top:2px}
+  .ma{align-self:flex-start;max-width:93%;position:relative}
+  .rtag{font-size:10px;color:var(--teal);font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px}
+  .ma .bbl{background:var(--sf);border:1px solid var(--br);border-radius:3px 14px 14px 14px;padding:8px 12px;line-height:1.55;white-space:pre-wrap;word-break:break-word}
+  .mt{font-size:10px;color:var(--dim);margin-top:2px;padding:0 1px}
+  .tb{align-self:flex-start;background:var(--sf);border:1px solid var(--br);border-left:3px solid var(--amb);border-radius:4px;padding:5px 9px;max-width:93%;font-size:12px}
+  .tb.er{border-left-color:var(--red)}
+  .thdr{color:var(--amb);font-weight:600;font-family:var(--mn);margin-bottom:3px}
+  .tb.er .thdr{color:var(--red)}
+  .tres{color:var(--dim);font-family:var(--mn);font-size:11px;max-height:100px;overflow:hidden;white-space:pre-wrap;word-break:break-all}
+  .sl{align-self:center;color:var(--dim);font-size:11px;font-style:italic;text-align:center}
+  .el{align-self:flex-start;color:var(--red);font-size:12px;background:rgba(244,71,71,.08);border-left:3px solid var(--red);border-radius:3px;padding:4px 9px;max-width:93%}
+  code{font-family:var(--mn);background:rgba(255,255,255,.07);padding:1px 4px;border-radius:3px;font-size:12px;color:var(--teal)}
+  pre{background:rgba(0,0,0,.25);border:1px solid var(--br);border-radius:4px;padding:6px 9px;overflow-x:auto;font-size:11px;margin:4px 0}
+  pre code{background:none;padding:0}
+  .mact{display:none;position:absolute;top:0;right:0;background:var(--sf);border:1px solid var(--br);border-radius:4px;gap:2px;padding:2px 4px}
+  .mu:hover .mact,.ma:hover .mact{display:flex}
+  .ab{background:none;border:none;color:var(--dim);cursor:pointer;font-size:11px;padding:1px 4px;border-radius:3px}
+  .ab:hover{color:var(--teal);background:rgba(78,201,176,.1)}
+  .iprev{max-width:100%;max-height:200px;border-radius:6px;border:1px solid var(--br);margin-top:4px}
+  #dov{display:none;position:fixed;inset:0;z-index:999;background:rgba(78,201,176,.12);border:3px dashed var(--teal);border-radius:8px;align-items:center;justify-content:center;font-size:18px;color:var(--teal);pointer-events:none}
+  #dov.show{display:flex}
+  #tmtr{display:flex;align-items:center;gap:8px;padding:3px 10px;background:var(--sf);border-top:1px solid var(--br);font-size:11px;color:var(--dim);flex-shrink:0}
+  #ctrk{flex:1;height:4px;background:var(--br);border-radius:2px;overflow:hidden}
+  #cfil{height:100%;width:0%;background:var(--grn);border-radius:2px;transition:width .4s,background .4s}
+  #cpct{min-width:28px;text-align:right}
+  #tcst{color:var(--teal);font-weight:600}
+  #obn{display:none;align-items:center;gap:8px;padding:4px 10px;background:rgba(206,145,120,.1);border-top:1px solid var(--amb);font-size:11px;color:var(--amb);flex-shrink:0}
+  #obn.show{display:flex}
+  #obn button{background:none;border:none;color:var(--amb);cursor:pointer;font-size:13px;margin-left:auto}
+  #ibar{display:flex;flex-direction:column;gap:4px;padding:6px 10px;background:var(--sf);border-top:1px solid var(--br);flex-shrink:0}
+  #ir{display:flex;gap:5px;align-items:flex-end}
+  #it{flex:1;background:var(--ib);color:var(--if);border:1px solid var(--br);border-radius:5px;padding:6px 9px;font-family:var(--fn);font-size:13px;resize:none;min-height:38px;max-height:110px;line-height:1.4}
+  #it:focus{outline:1px solid var(--teal);border-color:var(--teal)}
+  #it:disabled{opacity:.5}
+  #sb{background:var(--bb);color:var(--bf);border:none;border-radius:5px;padding:6px 12px;cursor:pointer;font-size:12px;font-weight:600;white-space:nowrap;height:38px}
+  #sb:hover:not(:disabled){background:var(--bh)}
+  #sb:disabled{opacity:.45;cursor:not-allowed}
+  #stpb{background:var(--red);color:#fff;border:none;border-radius:5px;padding:6px 10px;cursor:pointer;font-size:12px;font-weight:600;height:38px;display:none}
+  #stpb:hover{opacity:.85}
+  #stpb.show{display:block}
+  #tr{display:flex;gap:4px;flex-wrap:wrap;align-items:center}
+  .tb2{background:none;border:1px solid var(--br);border-radius:3px;color:var(--dim);padding:1px 6px;cursor:pointer;font-size:10px;font-family:var(--fn);transition:border-color .15s,color .15s}
+  .tb2:hover:not(:disabled){border-color:var(--teal);color:var(--teal)}
+  .tb2:disabled{opacity:.4;cursor:not-allowed}
+  .kh{font-size:10px;color:var(--dim);margin-left:auto}
+  #typ{display:none;gap:5px;align-items:center;color:var(--teal);font-size:11px}
+  #typ.show{display:flex}
+  .d{width:5px;height:5px;background:var(--teal);border-radius:50%;animation:b 1.1s infinite}
+  .d:nth-child(2){animation-delay:.18s}
+  .d:nth-child(3){animation-delay:.36s}
+  @keyframes b{0%,60%,100%{transform:translateY(0)}30%{transform:translateY(-5px)}}
 </style>
 </head>
 <body>
-
-<!-- Provider bar -->
-<div id="provider-bar">
-  <span title="Project directory" style="opacity:0.7">📁</span>
-  <span class="dir-label" id="dir-label">.</span>
-  <span class="bar-sep">│</span>
-  <label for="prov-sel" style="color:var(--dim)">Provider</label>
-  <select id="prov-sel">
+<div id="dov">📎 Drop files to inject as context</div>
+<div id="pbar">
+  <span style="opacity:.7;cursor:pointer" onclick="openProj()">📁</span>
+  <span class="dlbl" id="dlbl" title="" onclick="openProj()">.</span>
+  <span class="bsep">│</span>
+  <label for="ps" style="color:var(--dim)">Provider</label>
+  <select id="ps">
     <option value="anthropic">anthropic</option>
     <option value="openai">openai</option>
     <option value="gemini">gemini</option>
     <option value="mistral">mistral</option>
     <option value="ollama">ollama</option>
   </select>
-  <label for="model-sel" style="color:var(--dim)">Model</label>
-  <select id="model-sel" style="min-width:160px"></select>
+  <label for="ms" style="color:var(--dim)">Model</label>
+  <select id="ms" style="min-width:148px"></select>
+  <span id="mdesc" title=""></span>
+  <span style="flex:1"></span>
+  <button class="hbtn" title="Export chat" onclick="exportChat()">⬇</button>
+  <button class="hbtn" title="Help" onclick="vscode.postMessage({command:'openFile',filePath:''})">❓</button>
 </div>
-
-<!-- Chat -->
-<div id="chat"></div>
-
-<!-- Optimize banner -->
-<div id="opt-banner">
-  <span>⚠</span>
-  <span id="opt-text">Context is getting large — consider /clear, or run Audit to compress</span>
-  <button onclick="document.getElementById('opt-banner').classList.remove('show')">✕</button>
+<div id="chat" ondragover="dvr(event)" ondragleave="dlv()" ondrop="ddp(event)"></div>
+<div id="rh" title="Drag · Dbl-click collapse"></div>
+<div id="obn"><span>⚠</span><span id="obt">Context high</span>
+  <button onclick="document.getElementById('obn').classList.remove('show')">✕</button></div>
+<div id="tmtr">
+  <span>Context</span>
+  <div id="ctrk"><div id="cfil"></div></div>
+  <span id="cpct">0%</span><span id="tcnt">0+0</span><span id="tcst">$0.0000</span>
 </div>
-
-<!-- Token meter -->
-<div id="token-meter">
-  <span style="color:var(--dim)">Context</span>
-  <div id="ctx-track"><div id="ctx-fill"></div></div>
-  <span id="ctx-pct">0%</span>
-  <span id="tok-cnt">0 + 0 tok</span>
-  <span id="tok-cost">$0.0000</span>
-</div>
-
-<!-- Input bar -->
-<div id="input-bar">
-  <div id="typing">
-    <div class="dot"></div><div class="dot"></div><div class="dot"></div>
-    <span>Agent thinking…</span>
+<div id="ibar">
+  <div id="typ"><div class="d"></div><div class="d"></div><div class="d"></div>
+    <span>Agent thinking…</span></div>
+  <div id="ir">
+    <textarea id="it" rows="2" placeholder="Message AEE agent… (Ctrl+Enter · @ file · drag/drop)"></textarea>
+    <button id="sb" onclick="snd()">Send ↵</button>
+    <button id="stpb" onclick="stp()">◼ Stop</button>
   </div>
-  <div id="input-row">
-    <textarea id="input-text" rows="2"
-      placeholder="Message the AEE agent… (Ctrl+Enter to send)"></textarea>
-    <button id="send-btn" onclick="sendMsg()">Send ↵</button>
-  </div>
-  <div id="tools-row">
-    <button class="tool-btn" onclick="quickCmd('audit')">🔍 audit</button>
-    <button class="tool-btn" onclick="quickCmd('validate')">✅ validate</button>
-    <button class="tool-btn" onclick="quickCmd('doctor')">🩺 doctor</button>
-    <button class="tool-btn" onclick="quickCmd('epistemic')">🧠 epistemic</button>
-    <button class="tool-btn" onclick="quickCmd('stress')">⚡ stress-test</button>
-    <button class="tool-btn" onclick="quickCmd('/clear')">🗑 clear</button>
-    <button class="tool-btn" onclick="quickCmd('status')">📊 status</button>
-    <span class="kbd-hint">Ctrl+Enter to send</span>
+  <div id="tr">
+    <button class="tb2" onclick="q('audit')">🔍 audit</button>
+    <button class="tb2" onclick="q('validate')">✅ validate</button>
+    <button class="tb2" onclick="q('doctor')">🩺 doctor</button>
+    <button class="tb2" onclick="q('epistemic')">🧠 epistemic</button>
+    <button class="tb2" onclick="q('stress')">⚡ stress</button>
+    <button class="tb2" onclick="q('/clear')">🗑 clear</button>
+    <button class="tb2" onclick="q('status')">📊 status</button>
+    <button class="tb2" onclick="pf()" title="Pick @file">@ file</button>
+    <span class="kh">Ctrl+Enter</span>
   </div>
 </div>
-
 <script>
-/* ── VS Code API ── */
-const vscode = acquireVsCodeApi();
-
-/* ── Model registry ── */
-const MODELS = {
-  anthropic: ['claude-opus-4-5','claude-sonnet-4-5','claude-haiku-4-5','claude-opus-4-0','claude-sonnet-4-0'],
-  openai:    ['gpt-4o','gpt-4o-mini','o3','o3-mini','o1','gpt-4-turbo'],
-  gemini:    ['gemini-2.5-pro','gemini-2.5-flash','gemini-2.0-pro','gemini-2.0-flash'],
-  mistral:   ['mistral-large-latest','mistral-small-latest','codestral-latest','pixtral-large-latest'],
-  ollama:    ['qwen2.5:14b','qwen2.5:7b','llama3.2:latest','deepseek-coder-v2:latest','mistral:latest'],
-};
-
-/* Context window sizes by model keyword */
-const CTX = { claude:200000,'gpt-4o':128000, o1:200000, o3:200000, gemini:1000000, mistral:128000 };
-function ctxSize(m) {
-  const ml = (m||'').toLowerCase();
-  for (const [k,v] of Object.entries(CTX)) { if (ml.includes(k)) return v; }
-  return 128000;
-}
-
-let busy = false;
-let warned = false;
-let curModel = '';
-
-/* ── Helpers ── */
-function ts() { return new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}); }
-
-function esc(s) {
-  return String(s||'')
-    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-}
-
-/* Minimal markdown rendering */
-function renderMd(raw) {
-  let s = esc(raw);
-  // fenced code blocks
-  s = s.replace(/\`\`\`(\\w*)\\n([\\s\\S]*?)\`\`\`/g, (_,lang,code) =>
-    \`<pre><code>\${code}</code></pre>\`);
-  // inline code
-  s = s.replace(/\`([^\`]+)\`/g, '<code>$1</code>');
-  // bold / italic
-  s = s.replace(/\\*\\*([^*]+)\\*\\*/g, '<strong>$1</strong>');
-  s = s.replace(/\\*([^*]+)\\*/g,'<em>$1</em>');
-  // line breaks
-  s = s.replace(/\\n/g,'<br>');
+const vscode=acquireVsCodeApi();
+let curMdl='',busy=false,warned=false,lastU='';
+const CTX={claude:200000,'gpt-4o':128000,o1:200000,o3:200000,gemini:1000000,mistral:128000};
+function csize(m){const l=(m||'').toLowerCase();for(const[k,v]of Object.entries(CTX))if(l.includes(k))return v;return 128000}
+function ts(){return new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}
+function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+function rmd(r){
+  let s=esc(r);
+  s=s.replace(/\`\`\`(\\S*)\\n([\\s\\S]*?)\`\`\`/g,(_,_l,c)=>\`<pre><code>\${c}</code></pre>\`);
+  s=s.replace(/\`([^\`]+)\`/g,'<code>$1</code>');
+  s=s.replace(/\\*\\*([^*]+)\\*\\*/g,'<strong>$1</strong>');
+  s=s.replace(/\\*([^*]+)\\*/g,'<em>$1</em>');
+  s=s.replace(/\\n/g,'<br>');
   return s;
 }
-
-const chat = document.getElementById('chat');
-function scrollBot() { chat.scrollTop = chat.scrollHeight; }
-
-function addUser(text) {
-  const d = document.createElement('div');
-  d.className = 'msg-user';
-  d.innerHTML = \`<div class="bubble">\${esc(text)}</div><div class="meta">\${ts()}</div>\`;
-  chat.appendChild(d); scrollBot();
-}
-
-function addAssistant(text) {
-  const d = document.createElement('div');
-  d.className = 'msg-assistant';
-  d.innerHTML = \`<div class="role-tag">🧠 AEE Agent</div>
-    <div class="bubble">\${renderMd(text)}</div>
-    <div class="meta">\${ts()}</div>\`;
-  chat.appendChild(d); scrollBot();
-}
-
-function addTool(name, result, isErr) {
-  const d = document.createElement('div');
-  d.className = 'tool-block' + (isErr ? ' is-error' : '');
-  const icon = isErr ? '❌' : '✅';
-  const preview = esc((result||'').slice(0,500));
-  d.innerHTML = \`<div class="tool-header">\${icon} \${esc(name)}</div>
-    <div class="tool-result">\${preview}\${(result||'').length>500?'<em>…</em>':''}</div>\`;
-  chat.appendChild(d); scrollBot();
-}
-
-function addSystem(msg) {
-  const d = document.createElement('div');
-  d.className = 'system-line';
-  d.textContent = msg;
-  chat.appendChild(d); scrollBot();
-}
-
-function addError(msg) {
-  const d = document.createElement('div');
-  d.className = 'error-line';
-  d.textContent = '⚠ ' + (msg||'Unknown error');
-  chat.appendChild(d); scrollBot();
-}
-
-/* ── Token meter ── */
-function updateTokens(inT, outT, costUsd) {
-  const total = inT + outT;
-  const size  = ctxSize(curModel);
-  const pct   = Math.min(100, Math.round(total/size*100));
-  const fill  = document.getElementById('ctx-fill');
-  fill.style.width      = pct + '%';
-  fill.style.background = pct>=90 ? 'var(--red)' : pct>=70 ? 'var(--amber)' : 'var(--green)';
-  document.getElementById('ctx-pct').textContent   = pct + '%';
-  document.getElementById('tok-cnt').textContent   = inT.toLocaleString() + ' + ' + outT.toLocaleString() + ' tok';
-  document.getElementById('tok-cost').textContent  = '$' + Number(costUsd||0).toFixed(4);
-  if (pct>=70 && !warned) {
-    warned = true;
-    document.getElementById('opt-banner').classList.add('show');
-    document.getElementById('opt-text').textContent =
-      \`Context at \${pct}% — consider /clear or running Audit/Compress\`;
-  }
-}
-
-/* ── Busy state ── */
-function setBusy(val) {
-  busy = val;
-  document.getElementById('send-btn').disabled    = val;
-  document.getElementById('input-text').disabled  = val;
-  document.getElementById('typing').className      = val ? 'show' : '';
-  document.querySelectorAll('.tool-btn').forEach(b => b.disabled = val);
-}
-
-/* ── Send ── */
-function sendMsg() {
-  if (busy) return;
-  const inp = document.getElementById('input-text');
-  const txt = inp.value.trim();
-  if (!txt) return;
-  inp.value = '';
-  addUser(txt);
-  setBusy(true);
-  vscode.postMessage({ command: 'send', text: txt });
-}
-
-function quickCmd(cmd) {
-  if (busy) return;
-  addSystem('> ' + cmd);
-  setBusy(true);
-  vscode.postMessage({ command: 'send', text: cmd });
-}
-
-/* ── Keyboard ── */
-document.getElementById('input-text').addEventListener('keydown', e => {
-  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-    e.preventDefault();
-    sendMsg();
-  }
-});
-
-/* ── Provider / model selectors ── */
-function populateModels(prov) {
-  const sel = document.getElementById('model-sel');
-  sel.innerHTML = '';
-  (MODELS[prov]||[]).forEach(m => {
-    const o = document.createElement('option');
-    o.value = m; o.textContent = m;
-    sel.appendChild(o);
-  });
-  curModel = sel.value;
-}
-
-document.getElementById('prov-sel').addEventListener('change', e => {
-  const prov = e.target.value;
-  populateModels(prov);
-  vscode.postMessage({ command: 'setProvider', provider: prov });
-  vscode.postMessage({ command: 'setModel', model: document.getElementById('model-sel').value });
-});
-
-document.getElementById('model-sel').addEventListener('change', e => {
-  curModel = e.target.value;
-  vscode.postMessage({ command: 'setModel', model: curModel });
-});
-
-/* ── Messages from extension host ── */
-window.addEventListener('message', ({ data }) => {
-  switch (data.type) {
-
-    case 'init':
-      if (data.provider) {
-        document.getElementById('prov-sel').value = data.provider;
-        populateModels(data.provider);
-      }
-      if (data.model) {
-        document.getElementById('model-sel').value = data.model;
-        curModel = data.model;
-      }
-      if (data.projectDir) {
-        const lbl = document.getElementById('dir-label');
-        lbl.textContent = data.projectDir;
-        lbl.title = data.projectDir;
-      }
-      break;
-
-    case 'ready':
-      addSystem(\`AEE Agent ready — \${data.provider||''}  \${data.model||''}  (\${data.tools||0} tools)\`);
-      if (data.project_dir) {
-        const lbl = document.getElementById('dir-label');
-        lbl.textContent = data.project_dir;
-        lbl.title = data.project_dir;
-      }
-      break;
-
-    case 'llm_chunk':
-      addAssistant(data.text || '');
-      break;
-
-    case 'tool_started':
-      addSystem('  ⚙ ' + (data.name||'?') + '…');
-      break;
-
-    case 'tool_finished':
-      addTool(data.name||'?', data.result||'', !!data.is_error);
-      break;
-
-    case 'tokens':
-      updateTokens(data.in_tokens||0, data.out_tokens||0, data.cost_usd||0);
-      break;
-
-    case 'turn_done':
-      setBusy(false);
-      break;
-
-    case 'error':
-      addError(data.message);
-      setBusy(false);
-      break;
-
-    case 'system':
-      addSystem(data.message || '');
-      break;
-  }
-});
-
-/* Notify host we're ready */
-vscode.postMessage({ command: 'ready' });
+const C=document.getElementById('chat');
+function sb2(){C.scrollTop=C.scrollHeight}
+function addU(t){lastU=t;const d=document.createElement('div');d.className='mu';d.dataset.raw=t;
+  d.innerHTML=\`<div class="bbl">\${esc(t)}</div><div class="mt">\${ts()}</div>
+  <div class="mact"><button class="ab" title="Copy" onclick="cp(this)">⎘</button>
+  <button class="ab" title="Edit" onclick="ed(this)">✏</button></div>\`;
+  C.appendChild(d);sb2()}
+function addA(t){const d=document.createElement('div');d.className='ma';d.dataset.raw=t;
+  d.innerHTML=\`<div class="rtag">🧠 AEE Agent</div><div class="bbl">\${rmd(t)}</div>
+  <div class="mt">\${ts()}</div><div class="mact">
+  <button class="ab" title="Copy" onclick="cp(this)">⎘</button>
+  <button class="ab" title="Regenerate" onclick="regen()">↺</button></div>\`;
+  C.appendChild(d);sb2()}
+function addT(n,r,e){const d=document.createElement('div');d.className='tb'+(e?' er':'');
+  d.innerHTML=\`<div class="thdr">\${e?'❌':'✅'} \${esc(n)}</div>
+  <div class="tres">\${esc((r||'').slice(0,500))}\${(r||'').length>500?'<em>…</em>':''}</div>\`;
+  C.appendChild(d);sb2()}
+function addS(m){const d=document.createElement('div');d.className='sl';d.textContent=m;C.appendChild(d);sb2()}
+function addE(m){const d=document.createElement('div');d.className='el';d.textContent='⚠ '+(m||'?');C.appendChild(d);sb2()}
+function addImg(u,l){const d=document.createElement('div');d.className='mu';
+  d.innerHTML=\`<div class="bbl"><div style="font-size:11px;color:var(--dim);margin-bottom:4px">📎 \${esc(l)}</div>
+  <img class="iprev" src="\${u}" alt="\${esc(l)}"></div><div class="mt">\${ts()}</div>\`;
+  C.appendChild(d);sb2()}
+function updTok(i,o,c){const t=i+o,sz=csize(curMdl),p=Math.min(100,Math.round(t/sz*100));
+  const f=document.getElementById('cfil');f.style.width=p+'%';
+  f.style.background=p>=90?'var(--red)':p>=70?'var(--amb)':'var(--grn)';
+  document.getElementById('cpct').textContent=p+'%';
+  document.getElementById('tcnt').textContent=i.toLocaleString()+'+'+o.toLocaleString();
+  document.getElementById('tcst').textContent='$'+Number(c||0).toFixed(4);
+  if(p>=70&&!warned){warned=true;document.getElementById('obn').classList.add('show');
+    document.getElementById('obt').textContent=\`Context \${p}% — /clear or Audit/Compress\`}}
+function setBusy(v){busy=v;document.getElementById('sb').disabled=v;document.getElementById('it').disabled=v;
+  document.getElementById('typ').className=v?'show':'';document.getElementById('stpb').className=v?'show':'';
+  document.querySelectorAll('.tb2').forEach(b=>b.disabled=v)}
+function snd(){if(busy)return;const i=document.getElementById('it'),t=i.value.trim();if(!t)return;
+  i.value='';addU(t);setBusy(true);vscode.postMessage({command:'send',text:t})}
+function stp(){vscode.postMessage({command:'stop'});setBusy(false)}
+function q(c){if(busy)return;addS('> '+c);setBusy(true);vscode.postMessage({command:'send',text:c})}
+function openProj(){const l=document.getElementById('dlbl').title;if(l)vscode.postMessage({command:'openFile',filePath:l})}
+function cp(btn){const c=btn.closest('[data-raw]');navigator.clipboard.writeText(c?.dataset.raw||c?.querySelector('.bbl')?.textContent||'').catch(()=>{})}
+function ed(btn){const c=btn.closest('[data-raw]'),t=c?.dataset.raw||'';document.getElementById('it').value=t;document.getElementById('it').focus()}
+function regen(){if(busy||!lastU)return;setBusy(true);vscode.postMessage({command:'send',text:lastU})}
+function exportChat(){const ms=[];C.querySelectorAll('[data-raw]').forEach(el=>{const u=el.classList.contains('mu');ms.push((u?'**You:** ':'**Agent:** ')+(el.dataset.raw||''))});
+  const md='# specsmith Chat\\n'+new Date().toISOString()+'\\n\\n'+ms.join('\\n\\n---\\n\\n');
+  vscode.postMessage({command:'exportChat',markdown:md})}
+function pf(){vscode.postMessage({command:'pickFile'})}
+document.getElementById('it').addEventListener('keydown',e=>{
+  if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){e.preventDefault();snd();return}
+  if(e.key==='ArrowUp'&&!e.target.value.trim()){e.preventDefault();e.target.value=lastU;e.target.setSelectionRange(lastU.length,lastU.length)}
+  if(e.key==='@'&&!e.target.value.trim()){e.preventDefault();pf()}})
+function popMdl(prov,mdls,sel){const s=document.getElementById('ms');const pr=s.value;s.innerHTML='';
+  (mdls&&mdls.length?mdls:[]).forEach(m=>{const o=document.createElement('option');o.value=m.id;o.textContent=m.name||m.id;
+  o.title=[m.description||'',m.contextWindow?\`ctx: \${m.contextWindow.toLocaleString()}px\`:''].filter(Boolean).join(' — ');s.appendChild(o)});
+  if(sel)s.value=sel;else if(pr&&[...s.options].some(o=>o.value===pr))s.value=pr;
+  curMdl=s.value;updDesc()}
+function updDesc(){const s=document.getElementById('ms'),o=s.options[s.selectedIndex],d=document.getElementById('mdesc');d.textContent=o?.title||'';d.title=o?.title||''}
+document.getElementById('ps').addEventListener('change',e=>{const p=e.target.value;
+  vscode.postMessage({command:'setProvider',provider:p});vscode.postMessage({command:'getModels',provider:p})});
+document.getElementById('ms').addEventListener('change',e=>{curMdl=e.target.value;updDesc();vscode.postMessage({command:'setModel',model:curMdl})});
+/* Drag and drop */
+let dc=0;
+document.addEventListener('dragenter',()=>{dc++;document.getElementById('dov').classList.add('show')});
+document.addEventListener('dragleave',()=>{if(--dc<=0){dc=0;document.getElementById('dov').classList.remove('show')}});
+function dvr(e){e.preventDefault()}function dlv(){}
+function ddp(e){e.preventDefault();dc=0;document.getElementById('dov').classList.remove('show');
+  const f=e.dataTransfer?.files;if(f)for(const fi of f)inj(fi)}
+/* Paste images */
+document.addEventListener('paste',e=>{const items=e.clipboardData?.items||[];for(const it of items){if(it.type.startsWith('image/')){const f=it.getAsFile();if(f){e.preventDefault();inj(f)}}}});
+function inj(file){const im=file.type.startsWith('image/'),tx=file.type.startsWith('text/')||/\\.(md|txt|py|ts|js|json|yaml|yml|toml|sh|go|rs|c|cpp|h|cs|java)$/i.test(file.name);const rd=new FileReader();
+  if(im){rd.onload=ev=>{const u=ev.target.result;addImg(u,file.name);const i=document.getElementById('it');i.value=\`[Image: \${file.name}]\\n\${i.value}\`};rd.readAsDataURL(file)}
+  else if(tx||file.size<500000){rd.onload=ev=>{const c=ev.target.result;const p=c.length>8000?c.slice(0,8000)+'\\n…':c;const i=document.getElementById('it');i.value=\`[File: \${file.name}]\\n\\\`\\\`\\\`\\n\${p}\\n\\\`\\\`\\\`\\n\\n\${i.value}\`};rd.readAsText(file)}
+  else addS(\`Cannot inject \${file.name} (binary)\`)}
+/* Resize handle */
+(()=>{const h=document.getElementById('rh'),ce=document.getElementById('chat');let dr=false,sy=0,sh=0,col=false,sv=0;
+  h.addEventListener('mousedown',e=>{dr=true;sy=e.clientY;sh=ce.getBoundingClientRect().height;h.classList.add('drag');e.preventDefault()});
+  document.addEventListener('mousemove',e=>{if(!dr)return;const d=e.clientY-sy,nh=Math.max(80,sh+d);ce.style.flex='none';ce.style.height=nh+'px'});
+  document.addEventListener('mouseup',()=>{dr=false;h.classList.remove('drag')});
+  h.addEventListener('dblclick',()=>{if(col){ce.style.height=sv+'px';col=false}else{sv=ce.getBoundingClientRect().height;ce.style.flex='none';ce.style.height='80px';col=true}})})();
+/* Messages from host */
+window.addEventListener('message',({data})=>{switch(data.type){
+  case 'init':if(data.provider){document.getElementById('ps').value=data.provider;popMdl(data.provider,data.models||[],data.model)}
+    if(data.projectDir){const l=document.getElementById('dlbl');l.textContent=data.projectDir.split(/[\\\\/]/).pop()||data.projectDir;l.title=data.projectDir}break;
+  case 'models':popMdl(document.getElementById('ps').value,data.models,curMdl);break;
+  case 'ready':addS(\`AEE Agent ready — \${data.provider||''}/\${data.model||''} (\${data.tools||0} tools)\`);
+    if(data.project_dir){const l=document.getElementById('dlbl');l.textContent=data.project_dir.split(/[\\\\/]/).pop();l.title=data.project_dir}break;
+  case 'llm_chunk':addA(data.text||'');break;
+  case 'tool_started':addS('  ⚙ '+(data.name||'?')+'…');break;
+  case 'tool_finished':addT(data.name||'?',data.result||'',!!data.is_error);break;
+  case 'tokens':updTok(data.in_tokens||0,data.out_tokens||0,data.cost_usd||0);break;
+  case 'turn_done':setBusy(false);break;
+  case 'error':addE(data.message);setBusy(false);break;
+  case 'system':addS(data.message||'');break;
+  case 'file_picked':if(data.isImage&&data.dataUrl){addImg(data.dataUrl,data.fileName||'img');const i=document.getElementById('it');i.value=\`[Image: \${data.fileName}]\\n\${i.value}\`}
+    else if(data.fileContent!==undefined){const i=document.getElementById('it');const p=data.fileContent.length>8000?data.fileContent.slice(0,8000)+'\\n…':data.fileContent;i.value=\`[File: \${data.fileName}]\\n\\\`\\\`\\\`\\n\${p}\\n\\\`\\\`\\\`\\n\\n\${i.value}\`;i.focus()}break;
+}});
+vscode.postMessage({command:'ready'});
 </script>
 </body>
 </html>`;

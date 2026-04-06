@@ -12,7 +12,10 @@ export interface SpecsmithEvent {
     | 'turn_done'
     | 'error'
     | 'system'
-    | 'init'; // synthetic: sent by extension host to webview on setup
+    | 'init'        // synthetic: extension host → webview on setup
+    | 'models'      // synthetic: extension host → webview with dynamic model list
+    | 'chat_export' // synthetic: extension host → webview with export file path
+    | 'file_picked'; // synthetic: extension host → webview with file content
 
   // ready
   provider?: string;
@@ -43,15 +46,48 @@ export interface SpecsmithEvent {
 
   // init (extension → webview)
   projectDir?: string;
+
+  // models (extension → webview)
+  models?: ModelInfo[];
+
+  // file_picked (extension → webview)
+  fileName?: string;
+  fileContent?: string;
+  isImage?: boolean;
+  dataUrl?: string;
+}
+
+/** Model info returned by provider APIs. */
+export interface ModelInfo {
+  id: string;
+  name: string;       // display name
+  description?: string;
+  contextWindow?: number;
 }
 
 /** Messages sent from the webview to the extension host. */
 export interface WebviewMessage {
-  command: 'ready' | 'send' | 'setProvider' | 'setModel';
+  command:
+    | 'ready'
+    | 'send'
+    | 'stop'
+    | 'setProvider'
+    | 'setModel'
+    | 'getModels'
+    | 'pickFile'
+    | 'exportChat'
+    | 'openFile';
   text?: string;
   provider?: string;
   model?: string;
+  // exportChat
+  markdown?: string;
+  // openFile
+  filePath?: string;
 }
+
+/** Session lifecycle status — drives the status icon in the Sessions tree. */
+export type SessionStatus = 'starting' | 'waiting' | 'running' | 'error' | 'inactive';
 
 /** Configuration for a single agent session. */
 export interface SessionConfig {
