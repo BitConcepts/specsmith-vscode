@@ -60,6 +60,16 @@ function _reload(): void {
   _panel.webview.html = _html(_loadProjectData(_projectDir, _ctx));
 }
 
+/** Semver comparison: returns true if version a is strictly newer than b. */
+function _isNewerVersion(a: string, b: string): boolean {
+  const parse = (v: string) => v.split('.').map((n) => parseInt(n, 10) || 0);
+  const [aMaj, aMin, aPatch] = parse(a);
+  const [bMaj, bMin, bPatch] = parse(b);
+  if (aMaj !== bMaj) { return aMaj > bMaj; }
+  if (aMin !== bMin) { return aMin > bMin; }
+  return aPatch > bPatch;
+}
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 interface ScaffoldData {
@@ -382,9 +392,9 @@ async function _handleMsg(msg: GovMsg): Promise<void> {
 
     case 'ollamaUpdateModel': {
       if (!msg.modelId) { break; }
-      const exec2 = vscode.workspace.getConfiguration('specsmith').get<string>('executablePath', 'specsmith');
-      const term2 = vscode.window.createTerminal({ name: 'ollama update', cwd: _projectDir });
-      term2.sendText(`${exec2} ollama update "${msg.modelId}"`);
+      // Use 'ollama pull' directly — bypasses specsmith CLI for compatibility
+      const term2 = vscode.window.createTerminal({ name: 'ollama update' });
+      term2.sendText(`ollama pull "${msg.modelId}"`);
       term2.show();
       break;
     }
@@ -409,9 +419,14 @@ async function _handleMsg(msg: GovMsg): Promise<void> {
       break;
 
     case 'ollamaUpgrade': {
-      const exec4 = vscode.workspace.getConfiguration('specsmith').get<string>('executablePath', 'specsmith');
+      // Use platform-specific upgrade command directly — bypasses specsmith CLI
+      const upgradeCmd = process.platform === 'win32'
+        ? 'winget upgrade --id Ollama.Ollama'
+        : process.platform === 'darwin'
+          ? 'brew upgrade ollama'
+          : 'curl -fsSL https://ollama.ai/install.sh | sh';
       const term4 = vscode.window.createTerminal({ name: 'ollama upgrade', shellPath: _shellPath() });
-      term4.sendText(`${exec4} ollama upgrade`);
+      term4.sendText(upgradeCmd);
       term4.show();
       break;
     }
@@ -849,7 +864,9 @@ function _readPhase(projectDir: string): AEEPhaseInfo {
 function _html(data: ProjectData): string {
   const s     = data.scaffold;
   const ood   = s.spec_version && data.installedVersion && s.spec_version < data.installedVersion;
-  const upd   = data.availableVersion && data.installedVersion && data.availableVersion !== data.installedVersion;
+  // Only show 'update available' when PyPI version is STRICTLY NEWER than installed
+  const upd = data.availableVersion && data.installedVersion
+    && _isNewerVersion(data.availableVersion, data.installedVersion);
 
   const selL = s.languages ?? [], selI = s.integrations ?? [], selP = s.platforms ?? [],
         selF = s.fpga_tools ?? [], selAux = s.auxiliary_disciplines ?? [];
@@ -1176,16 +1193,23 @@ document.querySelectorAll('.chip').forEach(c=>{
   c.addEventListener('click',()=>c.classList.toggle('sel',c.querySelector('input').checked));
 });
 window.addEventListener('message',({data})=>{
-  if(data.type==='versionInfo'){
+    if(data.type==='versionInfo'){
     const btn=document.getElementById('chk-btn');
     btn.textContent='🔍 Check for Updates';btn.disabled=false;
     if(data.error){document.getElementById('ver-avail').textContent='Error — try again';}
     else if(data.available){
       document.getElementById('ver-avail').textContent=data.available;
       document.getElementById('last-check').textContent=new Date().toLocaleString([],{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
-      // Show Install Update button dynamically if update available
-      const installed=document.querySelector('.ver-val')?.textContent||'';
-      if(data.available&&data.available!==installed){
+      // Compare semver: only show Install Update if PyPI version is NEWER than installed
+      const instEl=document.querySelector('.ver-val');
+      const installed=(instEl&&instEl.textContent&&instEl.textContent!=='\u2014')?instEl.textContent.trim():'';
+      function semverGt(a,b){
+        const p=s=>s.split('.').map(n=>parseInt(n)||0);
+        const av=p(a),bv=p(b);
+        for(let i=0;i<3;i++){if((av[i]||0)>(bv[i]||0))return true;if((av[i]||0)<(bv[i]||0))return false;}
+        return false;
+      }
+      if(installed&&semverGt(data.available,installed)){
         const row=btn.closest('.btn-row');
         if(row&&!row.querySelector('.btn-upd')){
           const upd=document.createElement('button');
@@ -1193,6 +1217,10 @@ window.addEventListener('message',({data})=>{
           upd.onclick=()=>vscode.postMessage({command:'installUpdate'});
           row.appendChild(upd);
         }
+      } else if(installed) {
+        // Show 'up to date or newer' message
+        const avEl=document.getElementById('ver-avail');
+        if(avEl)avEl.textContent=data.available+' ✓ (installed version is current)';
       }
     }
   }
