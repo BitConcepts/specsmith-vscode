@@ -64,7 +64,8 @@ function _reload(): void {
 
 interface ScaffoldData {
   name?: string; type?: string; description?: string; vcs_platform?: string; spec_version?: string;
-  languages?: string[]; integrations?: string[]; platforms?: string[]; fpga_tools?: string[];
+  languages?: string[]; integrations?: string[]; platforms?: string[];
+  fpga_tools?: string[]; auxiliary_disciplines?: string[];
 }
 interface GovFile { rel: string; label: string; exists: boolean; lines?: number; addCmd?: string; }
 interface AEEPhaseInfo {
@@ -85,31 +86,116 @@ interface GovMsg {
   command:
     | 'saveScaffold' | 'runCommand' | 'sendToAgent' | 'openFile' | 'refresh'
     | 'addFile' | 'checkVersion' | 'installUpdate' | 'getSysInfo' | 'detectLanguages'
-    | 'phaseNext' | 'phaseSet';
+    | 'phaseNext' | 'phaseSet'
+    | 'getOllamaModels' | 'ollamaRemoveModel' | 'ollamaUpdateModel' | 'ollamaUpdateAll'
+    | 'checkOllamaVersion' | 'ollamaUpgrade' | 'scanProject';
   scaffold?: ScaffoldData; cmd?: string; prompt?: string; file?: string; addType?: string;
-  phaseKey?: string;
+  phaseKey?: string; modelId?: string;
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
+// Full language list — display names from languages.py (single source of truth)
 const LANGUAGES = [
-  'Python','Rust','Go','C','C++','TypeScript','JavaScript','C#','Swift','Kotlin',
-  'VHDL','SystemVerilog','Verilog','Dart','Java','Ruby','PHP','Scala','Haskell','Lua',
-  'Bash','PowerShell','Cmd','BitBake','YAML','Makefile','SQL','Zig','Nim',
+  // Systems
+  'C', 'C++', 'Rust', 'Go', 'Nim', 'Zig',
+  // Managed
+  'Python', 'C#', 'VB.NET', 'Java', 'Kotlin', 'Scala', 'Groovy',
+  // Web / JS
+  'JavaScript', 'TypeScript', 'Vue', 'Svelte',
+  // Mobile
+  'Swift', 'Dart', 'Objective-C',
+  // HDL / FPGA  (Verilog ≠ SystemVerilog — IEEE 1364 vs IEEE 1800)
+  'VHDL', 'Verilog', 'SystemVerilog',
+  // Scripting
+  'Bash', 'PowerShell', 'Cmd / Batch', 'Lua', 'Ruby', 'PHP', 'Perl',
+  // Functional
+  'Haskell', 'OCaml', 'Elixir', 'Erlang', 'Clojure',
+  // Config / Data
+  'YAML', 'TOML', 'JSON', 'SQL', 'Terraform / HCL', 'Protobuf', 'GraphQL',
+  // Build
+  'CMake', 'Makefile',
+  // Embedded / Linux
+  'BitBake', 'DeviceTree',
+  // Documentation
+  'Markdown', 'LaTeX', 'reStructuredText', 'AsciiDoc',
+  // Hardware / EDA
+  'KiCad',
+  // Data Science
+  'R', 'Julia', 'MATLAB', 'Jupyter Notebook',
 ];
 
 const VCS_PLATFORMS = ['github','gitlab','bitbucket','azure-devops','gitea','none'];
 
-const PROJECT_TYPES = [
-  'cli-python','lib-python','web-backend-python','web-fullstack','web-frontend',
-  'cli-rust','lib-rust','cli-go','lib-go','cli-node','lib-node',
-  'cli-cpp','lib-cpp','embedded-c','embedded-cpp',
-  'fpga-rtl-xilinx','fpga-rtl-intel','fpga-rtl-lattice','fpga-rtl-generic',
-  'mobile-ios','mobile-android','mobile-flutter',
-  'dotnet-cli','dotnet-lib','dotnet-web',
-  'microservice','data-pipeline','ml-model',
-  'research-academic','patent-application','legal-contract',
-  'business-strategy','project-management','yocto-bsp',
+// Grouped project types — values must match Python ProjectType enum exactly
+const PROJECT_TYPE_GROUPS: Array<{ group: string; types: Array<{ value: string; label: string }> }> = [
+  { group: 'Python', types: [
+    { value: 'cli-python',              label: 'CLI tool (Python)' },
+    { value: 'library-python',          label: 'Library / SDK (Python)' },
+    { value: 'backend-frontend',        label: 'Python backend + web frontend' },
+    { value: 'backend-frontend-tray',   label: 'Python backend + frontend + tray' },
+  ]},
+  { group: 'Systems / C/C++/Rust/Go', types: [
+    { value: 'cli-rust',                label: 'CLI tool (Rust)' },
+    { value: 'library-rust',            label: 'Library / crate (Rust)' },
+    { value: 'cli-go',                  label: 'CLI tool (Go)' },
+    { value: 'cli-c',                   label: 'CLI tool (C/C++)' },
+    { value: 'library-c',               label: 'Library (C/C++)' },
+  ]},
+  { group: 'Web / JS / .NET', types: [
+    { value: 'web-frontend',            label: 'Web frontend (SPA)' },
+    { value: 'fullstack-js',            label: 'Fullstack JS/TS' },
+    { value: 'dotnet-app',              label: '.NET / C# application' },
+    { value: 'mobile-app',              label: 'Mobile app (iOS/Android/Flutter)' },
+    { value: 'browser-extension',       label: 'Browser extension' },
+  ]},
+  { group: 'Hardware / FPGA', types: [
+    { value: 'fpga-rtl',                label: 'FPGA / RTL (generic / OSS)' },
+    { value: 'fpga-rtl-xilinx',         label: 'FPGA / RTL — AMD Xilinx (Vivado)' },
+    { value: 'fpga-rtl-intel',          label: 'FPGA / RTL — Intel Altera (Quartus)' },
+    { value: 'fpga-rtl-lattice',        label: 'FPGA / RTL — Lattice (Diamond)' },
+    { value: 'mixed-fpga-embedded',     label: 'Mixed: FPGA + Embedded C/C++' },
+    { value: 'mixed-fpga-firmware',     label: 'Mixed: FPGA + Python/C verification' },
+    { value: 'embedded-hardware',       label: 'Embedded / hardware (C/C++)' },
+    { value: 'yocto-bsp',               label: 'Yocto / embedded Linux BSP' },
+    { value: 'pcb-hardware',            label: 'PCB / hardware design (KiCad)' },
+  ]},
+  { group: 'DevOps / Data', types: [
+    { value: 'devops-iac',              label: 'DevOps / IaC (Terraform etc.)' },
+    { value: 'data-ml',                 label: 'Data / ML pipeline' },
+    { value: 'microservices',           label: 'Microservices' },
+    { value: 'monorepo',                label: 'Monorepo (multi-package)' },
+  ]},
+  { group: 'Documents', types: [
+    { value: 'spec-document',           label: 'Technical specification' },
+    { value: 'user-manual',             label: 'User manual / documentation' },
+    { value: 'research-paper',          label: 'Research paper / white paper' },
+    { value: 'api-specification',       label: 'API specification' },
+    { value: 'requirements-mgmt',       label: 'Requirements management' },
+  ]},
+  { group: 'Business / Legal', types: [
+    { value: 'business-plan',           label: 'Business plan / proposal' },
+    { value: 'patent-application',      label: 'Patent application' },
+    { value: 'legal-compliance',        label: 'Legal / compliance' },
+  ]},
+  { group: 'AEE Research', types: [
+    { value: 'epistemic-pipeline',      label: 'Epistemic pipeline (AEE)' },
+    { value: 'knowledge-engineering',   label: 'Knowledge engineering' },
+    { value: 'aee-research',            label: 'AEE research project' },
+  ]},
+];
+
+// Auxiliary disciplines for mixed projects
+const AUXILIARY_DISCIPLINES = [
+  { value: 'cli-python',          label: 'Python scripting / verification' },
+  { value: 'embedded-c',         label: 'Embedded C driver' },
+  { value: 'embedded-hardware',   label: 'Embedded C/C++ (full)' },
+  { value: 'cli-rust',            label: 'Rust component' },
+  { value: 'web-frontend',        label: 'Web frontend / HMI' },
+  { value: 'yocto-bsp',           label: 'Yocto BSP / Linux' },
+  { value: 'devops-iac',          label: 'DevOps / CI/CD' },
+  { value: 'data-ml',             label: 'Data analysis / ML' },
+  { value: 'fpga-rtl',            label: 'FPGA RTL core' },
 ];
 
 const INTEGRATIONS = ['warp','claude','cursor','copilot','aider','continue'];
@@ -170,7 +256,7 @@ function _loadProjectData(projectDir: string, context: vscode.ExtensionContext):
           (scaffold as Record<string, string>)[m[1]] = m[2].replace(/^["']|["']$/g, '').trim();
         }
       }
-      for (const field of ['integrations','platforms','languages','fpga_tools']) {
+      for (const field of ['integrations','platforms','languages','fpga_tools','auxiliary_disciplines']) {
         const re  = new RegExp(`^${field}:\\s*\\n((?:[ \\t]*- .+\\n?)+)`, 'm');
         const m2  = raw.match(re);
         if (m2) { (scaffold as Record<string, string[]>)[field] = m2[1].match(/- (.+)/g)?.map(l => l.slice(2).trim()) ?? []; }
@@ -275,6 +361,52 @@ async function _handleMsg(msg: GovMsg): Promise<void> {
       void _sendSysInfo();
       break;
 
+    case 'getOllamaModels':
+      void _sendOllamaModels();
+      break;
+
+    case 'ollamaRemoveModel': {
+      if (!msg.modelId) { break; }
+      const exec = vscode.workspace.getConfiguration('specsmith').get<string>('executablePath', 'specsmith');
+      const term = vscode.window.createTerminal({ name: 'ollama remove', cwd: _projectDir });
+      term.sendText(`${exec} ollama remove "${msg.modelId}" --yes`);
+      term.show();
+      break;
+    }
+
+    case 'ollamaUpdateModel': {
+      if (!msg.modelId) { break; }
+      const exec2 = vscode.workspace.getConfiguration('specsmith').get<string>('executablePath', 'specsmith');
+      const term2 = vscode.window.createTerminal({ name: 'ollama update', cwd: _projectDir });
+      term2.sendText(`${exec2} ollama update "${msg.modelId}"`);
+      term2.show();
+      break;
+    }
+
+    case 'ollamaUpdateAll': {
+      const exec3 = vscode.workspace.getConfiguration('specsmith').get<string>('executablePath', 'specsmith');
+      const term3 = vscode.window.createTerminal({ name: 'ollama update-all', cwd: _projectDir });
+      term3.sendText(`${exec3} ollama update --all`);
+      term3.show();
+      break;
+    }
+
+    case 'checkOllamaVersion':
+      void _checkOllamaVersion();
+      break;
+
+    case 'ollamaUpgrade': {
+      const exec4 = vscode.workspace.getConfiguration('specsmith').get<string>('executablePath', 'specsmith');
+      const term4 = vscode.window.createTerminal({ name: 'ollama upgrade', shellPath: _shellPath() });
+      term4.sendText(`${exec4} ollama upgrade`);
+      term4.show();
+      break;
+    }
+
+    case 'scanProject':
+      void _runScanProject();
+      break;
+
     case 'phaseNext': {
       const exec = vscode.workspace.getConfiguration('specsmith').get<string>('executablePath', 'specsmith');
       const term = vscode.window.createTerminal({ name: 'specsmith phase', cwd: _projectDir });
@@ -375,7 +507,107 @@ async function _sendSysInfo(): Promise<void> {
   _panel.webview.postMessage({ type: 'sysInfo', info });
 }
 
-// ── scaffold helpers ───────────────────────────────────────────────────────────
+// ── Ollama model list ──────────────────────────────────────────────────
+
+async function _sendOllamaModels(): Promise<void> {
+  if (!_panel) { return; }
+  try {
+    const { OllamaManager } = await import('./OllamaManager');
+    const detail = await OllamaManager.getInstalledIds();
+    // Try to get richer detail via the API
+    const http = await import('http');
+    const models = await new Promise<Array<{ name: string; size: number; modified_at: string }>>(
+      (resolve) => {
+        let data = '';
+        http.get('http://localhost:11434/api/tags', (r) => {
+          r.on('data', (c: Buffer) => { data += c.toString(); });
+          r.on('end', () => {
+            try {
+              const j = JSON.parse(data) as { models?: Array<{ name: string; size: number; modified_at: string }> };
+              resolve(j.models ?? []);
+            } catch { resolve([]); }
+          });
+        }).on('error', () => resolve(detail.map((n) => ({ name: n, size: 0, modified_at: '' }))));
+      },
+    );
+    _panel.webview.postMessage({ type: 'ollamaModels', models });
+  } catch {
+    _panel.webview.postMessage({ type: 'ollamaModels', models: [] });
+  }
+}
+
+// ── Ollama version check ────────────────────────────────────────────
+
+async function _checkOllamaVersion(): Promise<void> {
+  if (!_panel) { return; }
+  // Get local version from Ollama API
+  let installed: string | null = null;
+  try {
+    const http = await import('http');
+    installed = await new Promise<string | null>((resolve) => {
+      let d = '';
+      http.get('http://localhost:11434/api/version', (r) => {
+        r.on('data', (c: Buffer) => { d += c.toString(); });
+        r.on('end', () => {
+          try { resolve((JSON.parse(d) as { version?: string }).version ?? null); }
+          catch { resolve(null); }
+        });
+      }).on('error', () => resolve(null));
+    });
+  } catch { /* ignore */ }
+
+  // Get latest from GitHub releases
+  let latest: string | null = null;
+  try {
+    const httpsM = await import('https');
+    latest = await new Promise<string | null>((resolve, reject) => {
+      const req = httpsM.get(
+        'https://api.github.com/repos/ollama/ollama/releases/latest',
+        { headers: { 'Accept': 'application/vnd.github+json', 'User-Agent': 'specsmith-vscode' } },
+        (r) => {
+          let d = '';
+          r.on('data', (c: Buffer) => { d += c; });
+          r.on('end', () => {
+            try {
+              const tag = (JSON.parse(d) as { tag_name?: string }).tag_name ?? '';
+              resolve(tag.replace(/^v/, '') || null);
+            } catch { resolve(null); }
+          });
+        },
+      );
+      req.on('error', reject);
+      req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
+    });
+  } catch { /* ignore */ }
+
+  _panel.webview.postMessage({ type: 'ollamaVersionInfo', installed, latest });
+}
+
+// ── Project scanner ───────────────────────────────────────────────
+
+async function _runScanProject(): Promise<void> {
+  if (!_panel || !_projectDir) { return; }
+  const exec = vscode.workspace.getConfiguration('specsmith').get<string>('executablePath', 'specsmith');
+  const r    = cp.spawnSync(
+    exec,
+    ['scan', '--project-dir', _projectDir, '--json'],
+    { encoding: 'utf8', timeout: 15000 },
+  );
+  if (r.status !== 0 || !r.stdout.trim()) {
+    void vscode.window.showWarningMessage('specsmith scan failed — is specsmith v0.3.3+ installed?');
+    return;
+  }
+  try {
+    const result = JSON.parse(r.stdout.trim()) as {
+      name?: string; type?: string; languages?: string[];
+      fpga_tools?: string[]; auxiliary_disciplines?: string[];
+      vcs_platform?: string;
+    };
+    _panel.webview.postMessage({ type: 'scanResult', result });
+  } catch { /* ignore */ }
+}
+
+// ── scaffold helpers ───────────────────────────────────────────────
 
 function _replaceYamlSection(lines: string[], key: string, val: string | string[]): string[] {
   const out: string[] = [];
@@ -404,7 +636,13 @@ function _saveScaffold(projectDir: string, scaffold: ScaffoldData): void {
   for (const [k, v] of Object.entries({ name: scaffold.name ?? '', type: scaffold.type ?? '', description: scaffold.description ?? '', vcs_platform: scaffold.vcs_platform ?? '' })) {
     if (v) { lines = _replaceYamlSection(lines, k, v); }
   }
-  for (const [k, v] of Object.entries({ languages: scaffold.languages ?? [], integrations: scaffold.integrations ?? [], platforms: scaffold.platforms ?? [], fpga_tools: scaffold.fpga_tools ?? [] })) {
+  for (const [k, v] of Object.entries({
+    languages: scaffold.languages ?? [],
+    integrations: scaffold.integrations ?? [],
+    platforms: scaffold.platforms ?? [],
+    fpga_tools: scaffold.fpga_tools ?? [],
+    auxiliary_disciplines: scaffold.auxiliary_disciplines ?? [],
+  })) {
     if (v.length) { lines = _replaceYamlSection(lines, k, v); }
   }
   fs.writeFileSync(p, lines.join('\n'), 'utf8');
@@ -413,11 +651,45 @@ function _saveScaffold(projectDir: string, scaffold: ScaffoldData): void {
 
 // ── Language detection ─────────────────────────────────────────────────────────
 
+// EXT_LANG mirrors languages.py EXT_LANG (single source of truth — Verilog ≠ SystemVerilog)
 const EXT_LANG: Record<string, string> = {
-  '.py':'Python','.rs':'Rust','.go':'Go','.c':'C','.cpp':'C++','.cc':'C++','.h':'C','.hpp':'C++',
-  '.ts':'TypeScript','.tsx':'TypeScript','.js':'JavaScript','.cs':'C#','.swift':'Swift','.kt':'Kotlin',
-  '.vhd':'VHDL','.vhdl':'VHDL','.sv':'SystemVerilog','.v':'Verilog','.dart':'Dart','.java':'Java',
-  '.rb':'Ruby','.php':'PHP','.sh':'Bash','.ps1':'PowerShell','.cmd':'Cmd','.bb':'BitBake','.zig':'Zig',
+  // Systems
+  '.c':'C', '.h':'C', '.cpp':'C++', '.cc':'C++', '.cxx':'C++', '.hpp':'C++',
+  '.rs':'Rust', '.go':'Go', '.nim':'Nim', '.zig':'Zig',
+  // Managed
+  '.py':'Python', '.pyw':'Python', '.cs':'C#', '.java':'Java',
+  '.kt':'Kotlin', '.scala':'Scala', '.vb':'VB.NET',
+  // Web / JS
+  '.js':'JavaScript', '.mjs':'JavaScript', '.jsx':'JavaScript',
+  '.ts':'TypeScript', '.tsx':'TypeScript',
+  '.vue':'Vue', '.svelte':'Svelte',
+  // Mobile
+  '.swift':'Swift', '.dart':'Dart',
+  // HDL / FPGA  (IEEE 1364 Verilog ≠ IEEE 1800 SystemVerilog)
+  '.vhd':'VHDL', '.vhdl':'VHDL',
+  '.v':'Verilog',               // IEEE 1364 — legacy .v files
+  '.sv':'SystemVerilog',        // IEEE 1800 — design files
+  '.svh':'SystemVerilog',       // IEEE 1800 — header/interface files
+  // Scripting
+  '.sh':'Bash', '.bash':'Bash', '.ps1':'PowerShell', '.cmd':'Cmd / Batch', '.bat':'Cmd / Batch',
+  '.lua':'Lua', '.rb':'Ruby', '.php':'PHP', '.pl':'Perl',
+  // Functional
+  '.hs':'Haskell', '.ml':'OCaml', '.ex':'Elixir', '.erl':'Erlang', '.clj':'Clojure',
+  // Config / Data
+  '.yml':'YAML', '.yaml':'YAML', '.toml':'TOML', '.sql':'SQL',
+  '.tf':'Terraform / HCL', '.tfvars':'Terraform / HCL',
+  '.proto':'Protobuf', '.graphql':'GraphQL', '.gql':'GraphQL',
+  // Build
+  '.cmake':'CMake',
+  // Embedded / Linux
+  '.bb':'BitBake', '.bbappend':'BitBake', '.bbclass':'BitBake',
+  '.dts':'DeviceTree', '.dtsi':'DeviceTree',
+  // Documentation
+  '.md':'Markdown', '.tex':'LaTeX', '.rst':'reStructuredText', '.adoc':'AsciiDoc',
+  // Hardware / EDA
+  '.kicad_pcb':'KiCad', '.kicad_sch':'KiCad', '.kicad_pro':'KiCad',
+  // Data science
+  '.r':'R', '.rmd':'R', '.jl':'Julia', '.ipynb':'Jupyter Notebook',
 };
 const SKIP_DIRS = new Set(['node_modules','.git','.venv','__pycache__','dist','out','build','.specsmith']);
 
@@ -562,16 +834,29 @@ function _html(data: ProjectData): string {
   const ood   = s.spec_version && data.installedVersion && s.spec_version < data.installedVersion;
   const upd   = data.availableVersion && data.installedVersion && data.availableVersion !== data.installedVersion;
 
-  const selL = s.languages ?? [], selI = s.integrations ?? [], selP = s.platforms ?? [], selF = s.fpga_tools ?? [];
+  const selL = s.languages ?? [], selI = s.integrations ?? [], selP = s.platforms ?? [],
+        selF = s.fpga_tools ?? [], selAux = s.auxiliary_disciplines ?? [];
 
-  const typeOpts  = PROJECT_TYPES.map(t => `<option${s.type === t ? ' selected' : ''}>${t}</option>`).join('');
-  const vcsOpts   = VCS_PLATFORMS.map(v => `<option${s.vcs_platform === v ? ' selected' : ''}>${v}</option>`).join('');
+  // Grouped project type options with human-readable labels
+  const typeOpts = PROJECT_TYPE_GROUPS.map(g =>
+    `<optgroup label="${g.group}">` +
+    g.types.map(t =>
+      `<option value="${t.value}"${s.type === t.value ? ' selected' : ''}>${t.label}</option>`
+    ).join('') + '</optgroup>'
+  ).join('');
+  const vcsOpts = VCS_PLATFORMS.map(v => `<option${s.vcs_platform === v ? ' selected' : ''}>${v}</option>`).join('');
 
   const chips = (arr: string[], sel: string[], name: string) =>
     arr.map(x =>
       `<label class="chip${sel.includes(x) ? ' sel' : ''}">` +
       `<input type="checkbox" name="${name}" value="${x}"${sel.includes(x) ? ' checked' : ''}> ${x}</label>`
     ).join('');
+
+  // Auxiliary disciplines — use label from AUXILIARY_DISCIPLINES for display
+  const auxChips = AUXILIARY_DISCIPLINES.map(d =>
+    `<label class="chip${selAux.includes(d.value) ? ' sel' : ''}">` +
+    `<input type="checkbox" name="aux_disc" value="${d.value}"${selAux.includes(d.value) ? ' checked' : ''}> ${d.label}</label>`
+  ).join('');
 
   const fileRows = data.govFiles.map(f => f.exists
     ? `<tr><td class="ok">✓</td><td>${f.label}</td><td class="dim">${f.lines} lines</td>` +
@@ -722,6 +1007,7 @@ ${ood ? `<div class="warn-banner">⚠ scaffold.yml spec_version <b>${s.spec_vers
 <div class="btn-row">
   <button class="btn" onclick="save()">💾 Save</button>
   <button class="btn-sm" onclick="detectLang()">🔍 Detect Languages</button>
+  <button class="btn-sm" onclick="scanProj()" title="Run specsmith scan to auto-suggest name, type & languages">🔭 Scan Project</button>
   <button class="btn-sm" onclick="runCmd('upgrade')">↑ Upgrade spec</button>
 </div>
 </div>
@@ -732,11 +1018,24 @@ ${ood ? `<div class="warn-banner">⚠ scaffold.yml spec_version <b>${s.spec_vers
   specsmith uses this to generate CI/CD adapters and AGENTS.md guidance.</div>
 <h3>FPGA / HDL Tools</h3>
 <div class="chips">${chips(FPGA_TOOLS, selF, 'fpga_tool')}</div>
+<h3>Auxiliary Disciplines (mixed-discipline projects)</h3>
+<div class="info-box" style="font-size:10px;margin-bottom:5px">For projects that span multiple disciplines (e.g. FPGA + embedded C + Python verification), select additional discipline types here. specsmith will generate CI jobs and tool registry entries for each.</div>
+<div class="chips">${auxChips}</div>
 <h3>Agent Integrations</h3>
 <div class="chips">${chips(INTEGRATIONS, selI, 'integration')}</div>
 <h3>Target Platforms</h3>
 <div class="chips">${chips(PLATFORMS, selP, 'platform')}</div>
-<div class="btn-row"><button class="btn" onclick="save()">💾 Save</button></div>
+<h3 style="margin-top:12px">🗂 Installed Ollama Models</h3>
+<div id="ollama-mdl-load" class="dim" style="margin:4px 0">Click Refresh to load installed models</div>
+<table id="ollama-mdl-table" style="display:none;font-size:11px">
+  <thead><tr><td><b>Model</b></td><td class="dim">Size</td><td></td></tr></thead>
+  <tbody id="ollama-mdl-body"></tbody>
+</table>
+<div class="btn-row">
+  <button class="btn" onclick="save()">💾 Save</button>
+  <button class="btn-sm" onclick="loadOllamaModels()">↺ Refresh Models</button>
+  <button class="btn-sm" onclick="ollamaUpdateAll()">⬆ Update All Models</button>
+</div>
 </div>
 
 <!-- Files tab -->
@@ -760,7 +1059,16 @@ ${ood ? `<div class="warn-banner">⚠ scaffold.yml spec_version <b>${s.spec_vers
   <button class="btn" id="chk-btn" onclick="chkVer()">🔍 Check for Updates</button>
   ${upd ? '<button class="btn btn-upd" onclick="installUpd()">⬆ Install Update</button>' : ''}
 </div>
-<h3 style="margin-top:16px">System Info</h3>
+<h3 style="margin-top:16px">Ollama</h3>
+<div class="ver-grid">
+  <span class="ver-lbl">Installed</span><span class="ver-val" id="ollama-ver">—</span>
+  <span class="ver-lbl">Available</span><span class="ver-val" id="ollama-latest">—</span>
+</div>
+<div class="btn-row" style="margin-bottom:12px">
+  <button class="btn" id="ollama-chk-btn" onclick="chkOllamaVer()">🔍 Check Ollama</button>
+  <button class="btn-sm" onclick="ollamaUpgrade()">⬆ Upgrade Ollama</button>
+</div>
+<h3 style="margin-top:4px">System Info</h3>
 <div id="sys-load" class="dim">Loading…</div>
 <div id="sys-grid" class="sys-grid" style="display:none"></div>
 <div style="margin-top:8px"><button class="btn-sm" onclick="getSys()">↺ Refresh</button></div>
@@ -818,8 +1126,22 @@ function save(){
     integrations:[...document.querySelectorAll('input[name=integration]:checked')].map(e=>e.value),
     platforms:[...document.querySelectorAll('input[name=platform]:checked')].map(e=>e.value),
     fpga_tools:[...document.querySelectorAll('input[name=fpga_tool]:checked')].map(e=>e.value),
+    auxiliary_disciplines:[...document.querySelectorAll('input[name=aux_disc]:checked')].map(e=>e.value),
   }});
 }
+function scanProj(){vscode.postMessage({command:'scanProject'})}
+function loadOllamaModels(){
+  document.getElementById('ollama-mdl-load').style.display='';
+  document.getElementById('ollama-mdl-load').textContent='Loading…';
+  document.getElementById('ollama-mdl-table').style.display='none';
+  vscode.postMessage({command:'getOllamaModels'});
+}
+function ollamaUpdateAll(){vscode.postMessage({command:'ollamaUpdateAll'})}
+function chkOllamaVer(){
+  document.getElementById('ollama-chk-btn').textContent='⌛…';
+  vscode.postMessage({command:'checkOllamaVersion'});
+}
+function ollamaUpgrade(){vscode.postMessage({command:'ollamaUpgrade'})}
 function filt(inp,name){
   const q=inp.value.toLowerCase();
   document.querySelectorAll('input[name='+name+']').forEach(cb=>{
@@ -847,6 +1169,60 @@ window.addEventListener('message',({data})=>{
       .map(([k,l])=>\`<span class="sys-lbl">\${l}</span><span class="sys-val">\${data.info[k]}</span>\`).join('');
     document.getElementById('sys-load').style.display='none';
     g.style.display='grid';
+  }
+  if(data.type==='ollamaModels'){
+    const tbody=document.getElementById('ollama-mdl-body');
+    const load=document.getElementById('ollama-mdl-load');
+    const tbl=document.getElementById('ollama-mdl-table');
+    tbody.innerHTML=(data.models||[]).map(m=>{
+      const gb=(m.size>0?(m.size/1073741824).toFixed(1)+'GB':'');
+      const mod=(m.modified_at||'').slice(0,10);
+      return \`<tr><td>\${m.name}</td><td class="dim">\${gb}\${mod?' ['+mod+']':''}</td>
+        <td style="display:flex;gap:3px">
+          <button class="tb" onclick="vscode.postMessage({command:'ollamaUpdateModel',modelId:'\${m.name}'})">\u2b06 Update</button>
+          <button class="tb" style="color:var(--red)" onclick="vscode.postMessage({command:'ollamaRemoveModel',modelId:'\${m.name}'})">\u2717 Remove</button>
+        </td></tr>\`;
+    }).join('');
+    load.style.display='none';
+    tbl.style.display=data.models&&data.models.length?'':'none';
+    if(!data.models||!data.models.length){load.textContent='No models installed';load.style.display='';}
+  }
+  if(data.type==='ollamaVersionInfo'){
+    document.getElementById('ollama-chk-btn').textContent='🔍 Check Ollama';
+    document.getElementById('ollama-ver').textContent=data.installed||'(not running)';
+    document.getElementById('ollama-latest').textContent=data.latest
+      ? (data.installed&&data.latest!==data.installed
+        ? data.latest+' ← update available'
+        : data.latest+' ✓ up to date')
+      : '(could not check)';
+  }
+  if(data.type==='scanResult'){
+    const r=data.result;
+    if(r.name)document.getElementById('name').value=r.name;
+    if(r.vcs_platform){const v=document.getElementById('vcs');for(const o of v.options)if(o.value===r.vcs_platform)o.selected=true;}
+    // Set type: find matching option
+    if(r.type){const t=document.getElementById('type');for(const o of t.options)if(o.value===r.type){o.selected=true;break;}}
+    // Check language chips
+    if(r.languages&&r.languages.length){
+      document.querySelectorAll('input[name=language]').forEach(cb=>{
+        cb.checked=r.languages.includes(cb.value);
+        cb.closest('.chip')?.classList.toggle('sel',cb.checked);
+      });
+    }
+    // Check fpga_tools chips
+    if(r.fpga_tools&&r.fpga_tools.length){
+      document.querySelectorAll('input[name=fpga_tool]').forEach(cb=>{
+        cb.checked=r.fpga_tools.includes(cb.value);
+        cb.closest('.chip')?.classList.toggle('sel',cb.checked);
+      });
+    }
+    // Check aux disciplines chips
+    if(r.auxiliary_disciplines&&r.auxiliary_disciplines.length){
+      document.querySelectorAll('input[name=aux_disc]').forEach(cb=>{
+        cb.checked=r.auxiliary_disciplines.includes(cb.value);
+        cb.closest('.chip')?.classList.toggle('sel',cb.checked);
+      });
+    }
   }
 });
 </script>
