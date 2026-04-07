@@ -10,12 +10,22 @@ import * as cp from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { augmentedEnv } from './bridge';
 
 let _panel: vscode.WebviewPanel | undefined;
 let _ctx: vscode.ExtensionContext | undefined;
 let _projectDir: string | undefined;
 let _sendFn: ((t: string) => void) | undefined;
 let _openFn: (() => Promise<void>) | undefined;
+
+// Augmented process env with Python Scripts dirs prepended — fixes version
+// detection when VS Code extension host PATH doesn't include pipx/pip bins.
+const _ENV: NodeJS.ProcessEnv = augmentedEnv(process.env);
+
+/** Dispose the Settings panel — called when all sessions for a project close. */
+export function closeGovernancePanel(): void {
+  _panel?.dispose();
+}
 
 export function showGovernancePanel(
   context: vscode.ExtensionContext,
@@ -104,7 +114,7 @@ interface GovMsg {
     | 'getOllamaModels' | 'ollamaRemoveModel' | 'ollamaUpdateModel' | 'ollamaUpdateAll'
     | 'checkOllamaVersion' | 'ollamaUpgrade' | 'scanProject'
     | 'saveExecution' | 'scanTools' | 'toolInstall'
-    | 'reloadWindow';
+    | 'reloadWindow' | 'detectTools' | 'detectDisciplines';
   scaffold?: ScaffoldData; cmd?: string; prompt?: string; file?: string; addType?: string;
   phaseKey?: string; modelId?: string;
   profileName?: string; customAllowed?: string; customBlocked?: string; customBlockedTools?: string;
@@ -305,7 +315,8 @@ function _loadProjectData(projectDir: string, context: vscode.ExtensionContext):
   let installedVersion: string | null = null;
   try {
     const exec = vscode.workspace.getConfiguration('specsmith').get<string>('executablePath', 'specsmith');
-    const r    = cp.spawnSync(exec, ['--version'], { timeout: 3000, encoding: 'utf8' });
+    // Use augmented PATH so the extension host finds the same specsmith as the terminal
+    const r    = cp.spawnSync(exec, ['--version'], { timeout: 3000, encoding: 'utf8', env: _ENV });
     if (r.status === 0) { const m = (r.stdout ?? '').match(/(\d+\.\d+\.\d+)/); installedVersion = m?.[1] ?? null; }
   } catch { /* ignore */ }
 
@@ -461,6 +472,19 @@ async function _handleMsg(msg: GovMsg): Promise<void> {
     case 'scanTools':
       void _runToolsScan();
       break;
+
+    case 'detectTools':
+      void _runDetectTools();
+      break;
+
+    case 'detectDisciplines': {
+      const suggestions = _suggestDisciplines(
+        msg.scaffold?.type ?? '',
+        msg.scaffold?.languages ?? [],
+      );
+      _panel?.webview.postMessage({ type: 'disciplinesSuggested', disciplines: suggestions });
+      break;
+    }
 
     case 'toolInstall': {
       if (!msg.toolKey) { break; }
@@ -649,13 +673,68 @@ async function _checkOllamaVersion(): Promise<void> {
 
 // ── Project scanner ───────────────────────────────────────────────
 
+async function _runDetectTools(): Promise<void> {
+  if (!_panel || !_projectDir) { return; }
+  const exec = vscode.workspace.getConfiguration('specsmith').get<string>('executablePath', 'specsmith');
+  // Map tool executable names (scan output) back to FPGA_TOOLS chip values
+  const EXE_TO_CHIP: Record<string, string> = {
+    'vivado': 'vivado', 'quartus_sh': 'quartus', 'radiantlsp': 'radiant',
+    'diamondc': 'diamond', 'gw_sh': 'gowin', 'ghdl': 'ghdl',
+    'iverilog': 'iverilog', 'verilator': 'verilator', 'vsim': 'modelsim',
+    'xsim': 'xsim', 'gtkwave': 'gtkwave', 'surfer': 'surfer', 'vsg': 'vsg',
+    'verible-verilog-lint': 'verible', 'svlint': 'svlint', 'sby': 'symbiyosys',
+    'yosys': 'yosys', 'nextpnr-ecp5': 'nextpnr', 'openFPGALoader': 'openFPGALoader',
+  };
+  const r = cp.spawnSync(
+    exec,
+    ['tools', 'scan', '--project-dir', _projectDir, '--json', '--fpga'],
+    { encoding: 'utf8', timeout: 15000, env: _ENV },
+  );
+  let chipValues: string[] = [];
+  if (r.status === 0 && r.stdout.trim()) {
+    try {
+      const parsed = JSON.parse(r.stdout.trim()) as { tools?: Array<{ name: string; installed: boolean }> };
+      chipValues = (parsed.tools ?? [])
+        .filter(t => t.installed)
+        .map(t => EXE_TO_CHIP[t.name] ?? t.name)
+        .filter(v => FPGA_TOOLS.includes(v));
+    } catch { /* ignore */ }
+  }
+  _panel.webview.postMessage({ type: 'toolsDetected', chipValues });
+}
+
+/** Suggest auxiliary disciplines based on primary project type + detected languages. */
+function _suggestDisciplines(projectType: string, languages: string[]): string[] {
+  const suggestions: string[] = [];
+  const langs = new Set(languages.map(l => l.toLowerCase()));
+  const isHDL = projectType.startsWith('fpga') || projectType.startsWith('mixed-fpga');
+  const isEmbedded = projectType === 'embedded-hardware';
+  const isYocto = projectType === 'yocto-bsp';
+
+  if (isHDL) {
+    if (langs.has('c') || langs.has('c++')) { suggestions.push('embedded-c', 'embedded-hardware'); }
+    if (langs.has('python'))                { suggestions.push('cli-python'); }
+    if (langs.has('rust'))                  { suggestions.push('cli-rust'); }
+    if (langs.has('javascript') || langs.has('typescript')) { suggestions.push('web-frontend'); }
+    if (langs.has('bitbake') || langs.has('devicetree'))    { suggestions.push('yocto-bsp'); }
+  } else if (isEmbedded || isYocto) {
+    if (langs.has('vhdl') || langs.has('verilog') || langs.has('systemverilog')) {
+      suggestions.push('fpga-rtl');
+    }
+    if (langs.has('python')) { suggestions.push('cli-python'); }
+  }
+  // Deduplicate and keep only valid AUXILIARY_DISCIPLINES values
+  const valid = new Set(AUXILIARY_DISCIPLINES.map(d => d.value));
+  return [...new Set(suggestions)].filter(s => valid.has(s));
+}
+
 async function _runScanProject(): Promise<void> {
   if (!_panel || !_projectDir) { return; }
   const exec = vscode.workspace.getConfiguration('specsmith').get<string>('executablePath', 'specsmith');
   const r    = cp.spawnSync(
     exec,
     ['scan', '--project-dir', _projectDir, '--json'],
-    { encoding: 'utf8', timeout: 15000 },
+    { encoding: 'utf8', timeout: 15000, env: _ENV },
   );
   if (r.status !== 0 || !r.stdout.trim()) {
     const detail = ((r.stderr ?? '') + (r.stdout ?? '')).trim().slice(0, 300);
@@ -725,7 +804,7 @@ async function _runToolsScan(): Promise<void> {
   const r = cp.spawnSync(
     exec,
     ['tools', 'scan', '--project-dir', _projectDir, '--json', '--fpga'],
-    { encoding: 'utf8', timeout: 15000 },
+    { encoding: 'utf8', timeout: 15000, env: _ENV },
   );
   let tools: Array<{ name: string; category: string; installed: boolean; version: string }> = [];
   if (r.status === 0 && r.stdout.trim()) {
@@ -1128,14 +1207,18 @@ ${ood ? `<div class="warn-banner">⚠ scaffold.yml spec_version <b>${s.spec_vers
 
 <!-- Tools tab -->
 <div id="t-tools" class="tab-pane">
-<div class="info-box">Record which FPGA/HDL tools your project uses.
-  specsmith uses this for CI/CD adapters and AGENTS.md guidance.
-  <strong>Note:</strong> VS Code is your agent integration — no separate agent chips needed.</div>
+<div class="info-box">Record which FPGA/HDL tools your project uses. specsmith uses this for CI/CD adapters, AGENTS.md guidance, and AI tool context rules.</div>
 <h3>FPGA / HDL Tools</h3>
 <div class="chips">${chips(FPGA_TOOLS, selF, 'fpga_tool')}</div>
-<h3>Auxiliary Disciplines (mixed-discipline projects)</h3>
-<div class="info-box" style="font-size:10px;margin-bottom:5px">For projects that span multiple disciplines (e.g. FPGA + embedded C + Python verification), select additional discipline types. specsmith generates CI jobs and tool registry entries for each.</div>
+<div class="btn-row" style="margin-top:5px;margin-bottom:2px">
+  <button class="btn-sm" onclick="detectToolsNow()" title="Scan PATH for installed FPGA/HDL tools and auto-select them">🔍 Detect Installed Tools</button>
+</div>
+<h3 style="margin-top:14px">🔀 Mixed Disciplines</h3>
+<div class="info-box" style="font-size:10px;margin-bottom:5px">For projects that span multiple disciplines (e.g. FPGA + embedded C + Python), select additional types. specsmith generates CI jobs and tool rules for each.</div>
 <div class="chips">${auxChips}</div>
+<div class="btn-row" style="margin-top:5px;margin-bottom:2px">
+  <button class="btn-sm" onclick="suggestDisciplines()" title="Suggest disciplines based on current project type and detected languages">💡 Suggest by Languages</button>
+</div>
 <h3>Target Platforms</h3>
 <div class="chips">${chips(PLATFORMS, selP, 'platform')}</div>
 <h3 style="margin-top:12px">🗂 Installed Ollama Models</h3>
@@ -1294,6 +1377,14 @@ function scanToolsNow(){
   vscode.postMessage({command:'scanTools'});
 }
 function installTool(key){vscode.postMessage({command:'toolInstall',toolKey:key});}
+function detectToolsNow(){
+  vscode.postMessage({command:'detectTools'});
+}
+function suggestDisciplines(){
+  const type=document.getElementById('type')?.value||'';
+  const langs=[...document.querySelectorAll('input[name=language]:checked')].map(e=>e.value);
+  vscode.postMessage({command:'detectDisciplines',scaffold:{type:type,languages:langs}});
+}
 function refresh(){vscode.postMessage({command:'refresh'})}
 function runCmd(cmd){vscode.postMessage({command:'runCommand',cmd})}
 function sendToAgent(p){vscode.postMessage({command:'sendToAgent',prompt:p})}
@@ -1446,6 +1537,32 @@ window.addEventListener('message',({data})=>{
     }).join('');
     load.style.display='none';
     tbl.style.display='';
+  }
+  if(data.type==='toolsDetected'){
+    // Auto-check FPGA tool chips for tools detected on PATH
+    const installed=new Set(data.chipValues||[]);
+    document.querySelectorAll('input[name=fpga_tool]').forEach(cb=>{
+      if(installed.has(cb.value)){
+        cb.checked=true;
+        cb.closest('.chip')?.classList.add('sel');
+      }
+    });
+    if(data.chipValues?.length){
+      const count=data.chipValues.length;
+      // Brief flash on the h3 to confirm
+      const h3=document.querySelector('#t-tools h3');
+      if(h3){const orig=h3.textContent;h3.textContent='\u2713 Detected '+(count)+' tool'+(count!==1?'s':'')+': '+(data.chipValues.join(', '));setTimeout(()=>h3.textContent=orig,4000);}
+    }
+  }
+  if(data.type==='disciplinesSuggested'){
+    // Auto-check suggested auxiliary discipline chips
+    const suggested=new Set(data.disciplines||[]);
+    document.querySelectorAll('input[name=aux_disc]').forEach(cb=>{
+      if(suggested.has(cb.value)){
+        cb.checked=true;
+        cb.closest('.chip')?.classList.add('sel');
+      }
+    });
   }
   if(data.type==='scanResult'){
     const r=data.result;

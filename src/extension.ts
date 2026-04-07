@@ -13,7 +13,7 @@ import {
 import { EpistemicBar } from './EpistemicBar';
 import { ApiKeyManager } from './ApiKeyManager';
 import { showHelp } from './HelpPanel';
-import { showGovernancePanel } from './GovernancePanel';
+import { showGovernancePanel, closeGovernancePanel } from './GovernancePanel';
 import { fetchModels } from './ModelRegistry';
 import { OllamaManager, TASK_SUGGESTIONS } from './OllamaManager';
 import { SessionStatus } from './types';
@@ -40,8 +40,12 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // ── Session status → session tree ────────────────────────────────────────
   context.subscriptions.push(
-    onSessionStatusChange((_panel: SessionPanel, _status: SessionStatus) => {
+    onSessionStatusChange((_panel: SessionPanel, status: SessionStatus) => {
       sessionTree.refresh();
+      // Close Settings panel when the last session is disposed
+      if (status === 'inactive' && SessionPanel.all().length === 0) {
+        closeGovernancePanel();
+      }
     }),
   );
 

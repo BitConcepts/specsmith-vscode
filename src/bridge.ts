@@ -20,7 +20,7 @@ import { SpecsmithEvent, SessionConfig, SessionStatus } from './types';
  * Return an env object with known pipx/pip bin directories prepended to PATH.
  * VS Code's Extension Host process may not inherit the user's full shell PATH.
  */
-function augmentedEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+export function augmentedEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const env = { ...base };
   const extra: string[] = [];
 

@@ -688,8 +688,11 @@ function extractErrSummary(r){
   const lines=r.split('\\n').map(l=>l.trim()).filter(l=>l&&!l.startsWith('#'));
   return lines[0]?.slice(0,150)||r.slice(0,150);
 }
-function addT(n,r,e){const d=document.createElement('div');d.className='tb'+(e?' er':'');
-  if(e&&r&&r.length>200){
+function addT(n,r,e){
+  // Treat [exit N] (non-zero subprocess exit) as an error for expandable display
+  if(!e&&r&&/^\\[exit [1-9]/.test(r))e=true;
+  const d=document.createElement('div');d.className='tb'+(e?' er':'');
+  if(e&&r&&r.length>100){
     // Collapsible error with smart summary
     const summary=extractErrSummary(r);
     d.innerHTML=\`<div class="thdr">❌ \${esc(n)}</div>
