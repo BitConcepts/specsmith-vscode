@@ -183,6 +183,8 @@ export class SessionPanel implements vscode.Disposable {
       // Auto-run start protocol when agent becomes ready
       if (e.type === 'ready') {
         setTimeout(() => this._bridge.send('start'), 300);
+        // Background governance check — emit system messages for actionable issues
+        setTimeout(() => this._checkGovernance(), 800);
       }
       void this._panel.webview.postMessage(e);
     });
@@ -405,7 +407,37 @@ export class SessionPanel implements vscode.Disposable {
     }
   }
 
-  /** Update the model in a running session from outside (e.g. after download). */
+  /** Non-blocking governance check — emits system messages for detected issues. */
+  private _checkGovernance(): void {
+    const dir  = this._config.projectDir;
+    const emit = (msg: string) =>
+      void this._panel.webview.postMessage({ type: 'system', message: msg } satisfies SpecsmithEvent);
+
+    try {
+      // Duplicate requirements files: root REQUIREMENTS.md AND docs/REQUIREMENTS.md
+      const rootReq = path.join(dir, 'REQUIREMENTS.md');
+      const docsReq = path.join(dir, 'docs', 'REQUIREMENTS.md');
+      if (fs.existsSync(rootReq) && fs.existsSync(docsReq)) {
+        emit(
+          '\u26a0 Both REQUIREMENTS.md and docs/REQUIREMENTS.md exist. '
+          + 'docs/REQUIREMENTS.md is canonical — consider removing the root copy to avoid confusion.',
+        );
+      }
+
+      // Legacy lowercase architecture
+      const archLower = path.join(dir, 'docs', 'architecture.md');
+      const archUpper = path.join(dir, 'docs', 'ARCHITECTURE.md');
+      if (fs.existsSync(archLower) && !fs.existsSync(archUpper)) {
+        emit('\u26a0 docs/architecture.md exists but ARCHITECTURE.md does not. Run: specsmith upgrade --project-dir ".\'');
+      }
+
+      // No scaffold.yml
+      if (!fs.existsSync(path.join(dir, 'scaffold.yml'))) {
+        emit('\u26a0 scaffold.yml not found. Run specsmith init or specsmith import to set up governance.');
+      }
+    } catch { /* ignore — non-blocking */ }
+  }
+
   setModelExternal(modelId: string): void {
     this._bridge.setModel(modelId);
     this._config.model = modelId;

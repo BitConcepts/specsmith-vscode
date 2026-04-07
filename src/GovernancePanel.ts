@@ -36,7 +36,7 @@ export function showGovernancePanel(
 
   _panel = vscode.window.createWebviewPanel(
     'specsmithGovernance',
-    '🧠 Governance',
+    '⚙ Settings',
     vscode.ViewColumn.Beside,
     { enableScripts: true, retainContextWhenHidden: true },
   );
@@ -151,7 +151,8 @@ const PROJECT_TYPE_GROUPS: Array<{ group: string; types: Array<{ value: string; 
   ]},
   { group: 'Hardware / FPGA', types: [
     { value: 'fpga-rtl',                label: 'FPGA / RTL (generic / OSS)' },
-    { value: 'fpga-rtl-xilinx',         label: 'FPGA / RTL — AMD Xilinx (Vivado)' },
+    { value: 'fpga-rtl-amd',             label: 'FPGA / RTL — AMD Adaptive Computing (Vivado)' },
+    { value: 'fpga-rtl-xilinx',          label: 'FPGA / RTL — AMD (legacy fpga-rtl-xilinx id)' },
     { value: 'fpga-rtl-intel',          label: 'FPGA / RTL — Intel Altera (Quartus)' },
     { value: 'fpga-rtl-lattice',        label: 'FPGA / RTL — Lattice (Diamond)' },
     { value: 'mixed-fpga-embedded',     label: 'Mixed: FPGA + Embedded C/C++' },
@@ -198,8 +199,9 @@ const AUXILIARY_DISCIPLINES = [
   { value: 'fpga-rtl',            label: 'FPGA RTL core' },
 ];
 
-const INTEGRATIONS = ['warp','claude','cursor','copilot','aider','continue'];
-const PLATFORMS    = ['linux','windows','macos','embedded','cloud','wasm','xilinx-fpga','intel-fpga','lattice-fpga'];
+// INTEGRATIONS intentionally not shown in UI — VS Code extension IS the agent integration.
+// const INTEGRATIONS = [...];
+const PLATFORMS    = ['linux','windows','macos','embedded','cloud','wasm','amd-fpga','intel-fpga','lattice-fpga'];
 
 /** Tool-agnostic FPGA/HDL toolchain catalog. */
 const FPGA_TOOLS = [
@@ -270,7 +272,11 @@ function _loadProjectData(projectDir: string, context: vscode.ExtensionContext):
   }
 
   const govFiles: GovFile[] = GOV_FILES.flatMap(({ rel, label, addType }) => {
+    // Skip lowercase architecture.md if uppercase exists
     if (rel === 'docs/architecture.md' && fs.existsSync(path.join(projectDir, 'docs/ARCHITECTURE.md'))) { return []; }
+    // docs/REQUIREMENTS.md is canonical — skip root REQUIREMENTS.md if docs/ version exists.
+    // Source of truth: docs/REQUIREMENTS.md (matches specsmith scaffold template).
+    if (rel === 'REQUIREMENTS.md' && fs.existsSync(path.join(projectDir, 'docs/REQUIREMENTS.md'))) { return []; }
     const fp = path.join(projectDir, rel);
     const exists = fs.existsSync(fp);
     let lines: number | undefined;
@@ -384,9 +390,16 @@ async function _handleMsg(msg: GovMsg): Promise<void> {
     }
 
     case 'ollamaUpdateAll': {
-      const exec3 = vscode.workspace.getConfiguration('specsmith').get<string>('executablePath', 'specsmith');
-      const term3 = vscode.window.createTerminal({ name: 'ollama update-all', cwd: _projectDir });
-      term3.sendText(`${exec3} ollama update --all`);
+      // Bypass specsmith CLI — use 'ollama pull' directly so this works even
+      // with older installed specsmith versions that don't have the ollama group.
+      const { OllamaManager: _OM2 } = await import('./OllamaManager');
+      const installedIds = await _OM2.getInstalledIds();
+      if (!installedIds.length) {
+        void vscode.window.showInformationMessage('No Ollama models installed.');
+        break;
+      }
+      const term3 = vscode.window.createTerminal({ name: 'ollama update-all' });
+      term3.sendText(installedIds.map((m) => `ollama pull "${m}"`).join(' && '));
       term3.show();
       break;
     }
@@ -594,7 +607,11 @@ async function _runScanProject(): Promise<void> {
     { encoding: 'utf8', timeout: 15000 },
   );
   if (r.status !== 0 || !r.stdout.trim()) {
-    void vscode.window.showWarningMessage('specsmith scan failed — is specsmith v0.3.3+ installed?');
+    const detail = ((r.stderr ?? '') + (r.stdout ?? '')).trim().slice(0, 300);
+    const hint   = detail.includes('No such command') || detail.includes('Error: No such')
+      ? 'specsmith scan not available — upgrade to v0.3.3+: Ctrl+Shift+P → specsmith: Install or Upgrade'
+      : `specsmith scan failed: ${detail || 'empty output'}. Ensure specsmith v0.3.3+ is installed.`;
+    void vscode.window.showWarningMessage(hint);
     return;
   }
   try {
@@ -958,7 +975,7 @@ function _html(data: ProjectData): string {
 </style></head>
 <body>
 <div class="topbar">
-  <span class="title">🧠 Governance</span>
+    <span class="title">⚙ Settings</span>
   <div style="display:flex;gap:5px">
     <button class="btn-sm" onclick="refresh()">↺</button>
     <button class="btn-sm" onclick="sendToAgent('Run the session start protocol: sync, load AGENTS.md, check LEDGER.md.')">🤖 Agent</button>
@@ -1014,15 +1031,14 @@ ${ood ? `<div class="warn-banner">⚠ scaffold.yml spec_version <b>${s.spec_vers
 
 <!-- Tools tab -->
 <div id="t-tools" class="tab-pane">
-<div class="info-box">Record which FPGA/HDL tools and agent integrations your project uses.
-  specsmith uses this to generate CI/CD adapters and AGENTS.md guidance.</div>
+<div class="info-box">Record which FPGA/HDL tools your project uses.
+  specsmith uses this for CI/CD adapters and AGENTS.md guidance.
+  <strong>Note:</strong> VS Code is your agent integration — no separate agent chips needed.</div>
 <h3>FPGA / HDL Tools</h3>
 <div class="chips">${chips(FPGA_TOOLS, selF, 'fpga_tool')}</div>
 <h3>Auxiliary Disciplines (mixed-discipline projects)</h3>
-<div class="info-box" style="font-size:10px;margin-bottom:5px">For projects that span multiple disciplines (e.g. FPGA + embedded C + Python verification), select additional discipline types here. specsmith will generate CI jobs and tool registry entries for each.</div>
+<div class="info-box" style="font-size:10px;margin-bottom:5px">For projects that span multiple disciplines (e.g. FPGA + embedded C + Python verification), select additional discipline types. specsmith generates CI jobs and tool registry entries for each.</div>
 <div class="chips">${auxChips}</div>
-<h3>Agent Integrations</h3>
-<div class="chips">${chips(INTEGRATIONS, selI, 'integration')}</div>
 <h3>Target Platforms</h3>
 <div class="chips">${chips(PLATFORMS, selP, 'platform')}</div>
 <h3 style="margin-top:12px">🗂 Installed Ollama Models</h3>
@@ -1086,6 +1102,8 @@ ${ood ? `<div class="warn-banner">⚠ scaffold.yml spec_version <b>${s.spec_vers
   <button class="qa-btn" onclick="runCmd('export')">📄 export</button>
   <button class="qa-btn" onclick="runCmd('req list')">📋 req list</button>
   <button class="qa-btn" onclick="runCmd('req gaps')">⚠ req gaps</button>
+  <button class="qa-btn" onclick="runCmd('tools scan --fpga')">🔧 tools scan</button>
+  <button class="qa-btn" onclick="runCmd('phase')">🌱 phase status</button>
 </div>
 <h3>AI Prompt Palette</h3>
 ${prompts}
@@ -1109,7 +1127,11 @@ function sendToAgent(p){vscode.postMessage({command:'sendToAgent',prompt:p})}
 function openFile(f){vscode.postMessage({command:'openFile',file:f})}
 function addFile(t){vscode.postMessage({command:'addFile',addType:t})}
 function detectLang(){vscode.postMessage({command:'detectLanguages'})}
-function chkVer(){document.getElementById('chk-btn').textContent='⌛…';vscode.postMessage({command:'checkVersion'})}
+function chkVer(){
+  const btn=document.getElementById('chk-btn');
+  btn.textContent='⌛ Checking…';btn.disabled=true;
+  vscode.postMessage({command:'checkVersion'});
+}
 function installUpd(){vscode.postMessage({command:'installUpdate'})}
 function getSys(){
   document.getElementById('sys-load').style.display='';
@@ -1123,7 +1145,7 @@ function save(){
     description:document.getElementById('desc').value,
     vcs_platform:document.getElementById('vcs').value,
     languages:[...document.querySelectorAll('input[name=language]:checked')].map(e=>e.value),
-    integrations:[...document.querySelectorAll('input[name=integration]:checked')].map(e=>e.value),
+    // integrations not saved from UI (VS Code IS the agent integration)
     platforms:[...document.querySelectorAll('input[name=platform]:checked')].map(e=>e.value),
     fpga_tools:[...document.querySelectorAll('input[name=fpga_tool]:checked')].map(e=>e.value),
     auxiliary_disciplines:[...document.querySelectorAll('input[name=aux_disc]:checked')].map(e=>e.value),
@@ -1155,11 +1177,23 @@ document.querySelectorAll('.chip').forEach(c=>{
 });
 window.addEventListener('message',({data})=>{
   if(data.type==='versionInfo'){
-    document.getElementById('chk-btn').textContent='🔍 Check for Updates';
+    const btn=document.getElementById('chk-btn');
+    btn.textContent='🔍 Check for Updates';btn.disabled=false;
     if(data.error){document.getElementById('ver-avail').textContent='Error — try again';}
     else if(data.available){
       document.getElementById('ver-avail').textContent=data.available;
       document.getElementById('last-check').textContent=new Date().toLocaleString([],{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+      // Show Install Update button dynamically if update available
+      const installed=document.querySelector('.ver-val')?.textContent||'';
+      if(data.available&&data.available!==installed){
+        const row=btn.closest('.btn-row');
+        if(row&&!row.querySelector('.btn-upd')){
+          const upd=document.createElement('button');
+          upd.className='btn btn-upd';upd.textContent='⬆ Install Update';
+          upd.onclick=()=>vscode.postMessage({command:'installUpdate'});
+          row.appendChild(upd);
+        }
+      }
     }
   }
   if(data.type==='sysInfo'){
