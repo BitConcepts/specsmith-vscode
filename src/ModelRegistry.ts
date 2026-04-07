@@ -29,49 +29,62 @@ const _cache = new Map<string, CacheEntry>();
 
 // ── Static fallbacks ──────────────────────────────────────────────────────────
 
+// Static fallbacks — updated April 2026.
+// These are shown before the live API fetch completes, and as a fallback
+// if the provider API is unreachable.
 const STATIC: Record<string, ModelInfo[]> = {
   anthropic: [
-    { id: 'claude-opus-4-5',    name: 'Claude Opus 4.5',    category: 'Latest',    contextWindow: 200000, description: 'Most capable — complex reasoning & coding' },
-    { id: 'claude-sonnet-4-5',  name: 'Claude Sonnet 4.5',  category: 'Latest',    contextWindow: 200000, description: 'Balanced — fast & highly capable' },
+    // claude-4.6 series (current as of April 2026)
+    { id: 'claude-opus-4-6',    name: 'Claude Opus 4.6',    category: 'Latest',    contextWindow: 200000, description: 'Most capable — complex reasoning & coding' },
+    { id: 'claude-sonnet-4-6',  name: 'Claude Sonnet 4.6',  category: 'Latest',    contextWindow: 200000, description: 'Balanced — fast & highly capable' },
     { id: 'claude-haiku-4-5',   name: 'Claude Haiku 4.5',   category: 'Latest',    contextWindow: 200000, description: 'Fastest — best cost-efficiency' },
-    { id: 'claude-opus-4-0',    name: 'Claude Opus 4.0',    category: 'Previous',  contextWindow: 200000, description: 'Previous flagship' },
-    { id: 'claude-sonnet-4-0',  name: 'Claude Sonnet 4.0',  category: 'Previous',  contextWindow: 200000, description: 'Previous balanced' },
+    // claude-4.5 series
+    { id: 'claude-opus-4-5',    name: 'Claude Opus 4.5',    category: 'Previous',  contextWindow: 200000, description: 'Previous flagship' },
+    { id: 'claude-sonnet-4-5',  name: 'Claude Sonnet 4.5',  category: 'Previous',  contextWindow: 200000, description: 'Previous balanced' },
   ],
   openai: [
-    // Multimodal
-    { id: 'gpt-4o',           name: 'GPT-4o',           category: 'Multimodal', contextWindow: 128000, description: 'Vision + text, fast' },
-    { id: 'gpt-4o-mini',      name: 'GPT-4o Mini',      category: 'Multimodal', contextWindow: 128000, description: 'Cost-efficient multimodal' },
+    // Multimodal (GPT-4 family)
+    { id: 'gpt-4o',           name: 'GPT-4o',           category: 'Multimodal', contextWindow: 128000,  description: 'Vision + text, fast' },
+    { id: 'gpt-4o-mini',      name: 'GPT-4o Mini',      category: 'Multimodal', contextWindow: 128000,  description: 'Cost-efficient multimodal' },
     { id: 'gpt-4.1',          name: 'GPT-4.1',          category: 'Multimodal', contextWindow: 1047576, description: 'Latest GPT-4.1, 1M ctx' },
     { id: 'gpt-4.1-mini',     name: 'GPT-4.1 Mini',     category: 'Multimodal', contextWindow: 1047576, description: 'Fast GPT-4.1 mini' },
     { id: 'gpt-4.1-nano',     name: 'GPT-4.1 Nano',     category: 'Multimodal', contextWindow: 1047576, description: 'Fastest, cheapest GPT-4.1' },
-    // Reasoning
-    { id: 'o4-mini',          name: 'o4-mini',          category: 'Reasoning',  contextWindow: 200000, description: 'Latest fast reasoning' },
-    { id: 'o3',               name: 'o3',               category: 'Reasoning',  contextWindow: 200000, description: 'Deep reasoning, complex tasks' },
-    { id: 'o3-mini',          name: 'o3-mini',          category: 'Reasoning',  contextWindow: 200000, description: 'Fast reasoning' },
-    { id: 'o1',               name: 'o1',               category: 'Reasoning',  contextWindow: 200000, description: 'Advanced reasoning' },
-    { id: 'o1-mini',          name: 'o1-mini',          category: 'Reasoning',  contextWindow: 128000, description: 'Lightweight reasoning' },
+    // Reasoning (o-series) — use developer role for system messages
+    { id: 'o4-mini',          name: 'o4-mini',          category: 'Reasoning',  contextWindow: 200000,  description: 'Latest fast reasoning (uses developer role)' },
+    { id: 'o3',               name: 'o3',               category: 'Reasoning',  contextWindow: 200000,  description: 'Deep reasoning, complex tasks' },
+    { id: 'o3-mini',          name: 'o3-mini',          category: 'Reasoning',  contextWindow: 200000,  description: 'Fast reasoning' },
+    { id: 'o1',               name: 'o1',               category: 'Reasoning',  contextWindow: 200000,  description: 'Advanced reasoning' },
     // Previous
-    { id: 'gpt-4-turbo',      name: 'GPT-4 Turbo',      category: 'Previous',   contextWindow: 128000, description: 'Previous generation' },
+    { id: 'gpt-4-turbo',      name: 'GPT-4 Turbo',      category: 'Previous',   contextWindow: 128000,  description: 'Previous generation' },
   ],
   gemini: [
-    { id: 'gemini-2.5-pro',    name: 'Gemini 2.5 Pro',    category: 'Latest',   contextWindow: 1048576, description: '1M context, reasoning' },
-    { id: 'gemini-2.5-flash',  name: 'Gemini 2.5 Flash',  category: 'Latest',   contextWindow: 1048576, description: '1M context, fast' },
-    { id: 'gemini-2.0-pro',    name: 'Gemini 2.0 Pro',    category: 'Previous', contextWindow: 1048576, description: 'Previous generation' },
-    { id: 'gemini-2.0-flash',  name: 'Gemini 2.0 Flash',  category: 'Previous', contextWindow: 1048576, description: 'Previous fast' },
+    // Gemini 3 series (current frontier, April 2026)
+    { id: 'gemini-3.1-pro-preview',  name: 'Gemini 3.1 Pro Preview',  category: 'Frontier', contextWindow: 1048576, description: 'Latest frontier — reasoning + coding' },
+    { id: 'gemini-3-flash-preview',  name: 'Gemini 3 Flash Preview',  category: 'Frontier', contextWindow: 1048576, description: 'Fastest frontier model' },
+    // Gemini 2.5 series (stable)
+    { id: 'gemini-2.5-pro',          name: 'Gemini 2.5 Pro',          category: 'Stable',   contextWindow: 1048576, description: '1M context, reasoning' },
+    { id: 'gemini-2.5-flash',        name: 'Gemini 2.5 Flash',        category: 'Stable',   contextWindow: 1048576, description: '1M context, fast (free tier)' },
+    // Deprecated — shutting down June 1, 2026
+    { id: 'gemini-2.0-flash',        name: 'Gemini 2.0 Flash (⚠ deprecated)',  category: 'Deprecated', contextWindow: 1048576, description: 'Shutting down June 1, 2026' },
   ],
   mistral: [
-    { id: 'mistral-large-latest',  name: 'Mistral Large',       category: 'General', contextWindow: 131072, description: 'Most capable Mistral' },
-    { id: 'mistral-small-latest',  name: 'Mistral Small',       category: 'General', contextWindow: 131072, description: 'Fast, cost-efficient' },
-    { id: 'codestral-latest',      name: 'Codestral',           category: 'Code',    contextWindow: 262144, description: 'Coding specialist, 256K ctx' },
-    { id: 'pixtral-large-latest',  name: 'Pixtral Large',       category: 'Vision',  contextWindow: 131072, description: 'Multimodal + OCR' },
-    { id: 'pixtral-12b-2409',      name: 'Pixtral 12B',         category: 'Vision',  contextWindow: 131072, description: 'Lightweight multimodal' },
+    { id: 'mistral-large-latest',  name: 'Mistral Large',   category: 'General', contextWindow: 131072, description: 'Most capable Mistral' },
+    { id: 'mistral-small-latest',  name: 'Mistral Small',   category: 'General', contextWindow: 131072, description: 'Fast, cost-efficient' },
+    { id: 'codestral-latest',      name: 'Codestral',       category: 'Code',    contextWindow: 262144, description: 'Coding specialist, 256K ctx' },
+    { id: 'pixtral-large-latest',  name: 'Pixtral Large',   category: 'Vision',  contextWindow: 131072, description: 'Multimodal + OCR' },
+    { id: 'pixtral-12b-2409',      name: 'Pixtral 12B',     category: 'Vision',  contextWindow: 131072, description: 'Lightweight multimodal' },
   ],
   ollama: [
-    { id: 'qwen2.5:14b',              name: 'Qwen 2.5 14B',          category: 'General', contextWindow: 32768 },
-    { id: 'qwen2.5:7b',               name: 'Qwen 2.5 7B',           category: 'General', contextWindow: 32768 },
-    { id: 'llama3.2:latest',          name: 'Llama 3.2',             category: 'General', contextWindow: 131072 },
-    { id: 'deepseek-coder-v2:latest', name: 'DeepSeek Coder v2',     category: 'Code',    contextWindow: 163840 },
-    { id: 'mistral:latest',           name: 'Mistral (local)',        category: 'General', contextWindow: 32768 },
+    // Qwen 3 (latest generation, April 2026 — tool calling, 128K ctx)
+    { id: 'qwen3:14b',              name: 'Qwen 3 14B',            category: 'Latest',   contextWindow: 131072, description: 'Best 14B — tool calling, 128K ctx' },
+    { id: 'qwen3:7b',               name: 'Qwen 3 7B',             category: 'Latest',   contextWindow: 131072, description: 'Fast, tool calling, 128K ctx' },
+    { id: 'qwen3:32b',              name: 'Qwen 3 32B',            category: 'Powerful', contextWindow: 131072, description: 'Top quality (high VRAM)' },
+    { id: 'gemma3:12b',             name: 'Gemma 3 12B',           category: 'Latest',   contextWindow: 131072, description: 'Google Gemma 3, 128K, vision' },
+    // Qwen 2.5 (previous stable)
+    { id: 'qwen2.5:14b',            name: 'Qwen 2.5 14B',          category: 'General',  contextWindow: 32768,  description: 'Previous gen, reliable' },
+    { id: 'qwen2.5:7b',             name: 'Qwen 2.5 7B',           category: 'General',  contextWindow: 32768,  description: 'Previous gen, fast' },
+    { id: 'llama3.2:latest',        name: 'Llama 3.2 3B',          category: 'Tiny',     contextWindow: 131072, description: 'Tiny & fast, minimal VRAM' },
+    { id: 'deepseek-coder-v2:latest', name: 'DeepSeek Coder v2',   category: 'Code',     contextWindow: 163840, description: 'Top local coding model' },
   ],
 };
 
