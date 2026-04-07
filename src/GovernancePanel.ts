@@ -10,7 +10,7 @@ import * as cp from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { augmentedEnv } from './bridge';
+import { augmentedEnv, findSpecsmith } from './bridge';
 
 let _panel: vscode.WebviewPanel | undefined;
 let _ctx: vscode.ExtensionContext | undefined;
@@ -317,8 +317,11 @@ function _loadProjectData(projectDir: string, context: vscode.ExtensionContext):
   let installedVersion: string | null = null;
   try {
     const exec = vscode.workspace.getConfiguration('specsmith').get<string>('executablePath', 'specsmith');
-    // Use augmented PATH so the extension host finds the same specsmith as the terminal
-    const r    = cp.spawnSync(exec, ['--version'], { timeout: 3000, encoding: 'utf8', env: _ENV });
+    // Use the SAME findSpecsmith logic as bridge.ts: iterates through the augmented
+    // PATH and verifies the binary is >= 0.3.1. This guarantees parity between the
+    // session (bridge) and the Settings panel version display.
+    const resolved = findSpecsmith(exec, _ENV.PATH ?? '');
+    const r = cp.spawnSync(resolved, ['--version'], { timeout: 3000, encoding: 'utf8' });
     if (r.status === 0) { const m = (r.stdout ?? '').match(/(\d+\.\d+\.\d+)/); installedVersion = m?.[1] ?? null; }
   } catch { /* ignore */ }
 
@@ -486,6 +489,8 @@ async function _handleMsg(msg: GovMsg): Promise<void> {
       if (!msg.channel) { break; }
       const cfg = vscode.workspace.getConfiguration('specsmith');
       void cfg.update('releaseChannel', msg.channel, vscode.ConfigurationTarget.Global);
+      // Auto-refresh version check so pre-release versions show immediately
+      void _checkVersion(_ctx);
       break;
     }
 
@@ -533,9 +538,35 @@ async function _handleMsg(msg: GovMsg): Promise<void> {
   }
 }
 
+// ── Version helpers ────────────────────────────────────────────────────────────
+
+/** Parse a PEP 440 version to a numeric tuple for comparison.
+ *  Returns [major, minor, patch, pre] where stable releases have pre=999999 (highest). */
+function _parseVer(v: string): [number, number, number, number] {
+  const m = v.match(/^(\d+)\.(\d+)\.(\d+)(?:\.dev(\d+)|a(\d+)|b(\d+)|rc(\d+))?/);
+  if (!m) { return [0, 0, 0, 0]; }
+  let pre = 999999;  // stable > all pre-releases
+  if (m[4] !== undefined)      { pre = parseInt(m[4], 10); }         // .devN (lowest)
+  else if (m[5] !== undefined) { pre = 10000 + parseInt(m[5], 10); } // aN
+  else if (m[6] !== undefined) { pre = 20000 + parseInt(m[6], 10); } // bN
+  else if (m[7] !== undefined) { pre = 30000 + parseInt(m[7], 10); } // rcN
+  return [parseInt(m[1], 10), parseInt(m[2], 10), parseInt(m[3], 10), pre];
+}
+
+/** Compare two PEP 440 version strings. Returns <0/0/>0 like Array.sort. */
+function _cmpVer(a: string, b: string): number {
+  const av = _parseVer(a), bv = _parseVer(b);
+  for (let i = 0; i < 4; i++) {
+    const d = av[i] - bv[i];
+    if (d !== 0) { return d; }
+  }
+  return 0;
+}
+
 // ── Version check ──────────────────────────────────────────────────────────────
 
 async function _checkVersion(context: vscode.ExtensionContext): Promise<void> {
+  const channel = vscode.workspace.getConfiguration('specsmith').get<string>('releaseChannel', 'stable');
   await context.globalState.update('specsmith.lastVersionCheck', Date.now());
   try {
     const httpsM = await import('https');
@@ -548,7 +579,24 @@ async function _checkVersion(context: vscode.ExtensionContext): Promise<void> {
       req.on('error', reject);
       req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
     });
-    const latest = (JSON.parse(raw) as { info?: { version?: string } }).info?.version ?? '';
+    const pypiData = JSON.parse(raw) as {
+      info?: { version?: string };
+      releases?: Record<string, Array<{ yanked?: boolean }>>;
+    };
+
+    let latest: string;
+    if (channel === 'pre-release') {
+      // Find the highest version across ALL releases (including devN / alpha / beta / rc)
+      const candidates = Object.entries(pypiData.releases ?? {})
+        .filter(([, files]) => files.length > 0 && !files.every(f => f.yanked))
+        .map(([v]) => v);
+      candidates.sort(_cmpVer);
+      latest = candidates[candidates.length - 1] ?? pypiData.info?.version ?? '';
+    } else {
+      // Stable channel: use the latest stable version from PyPI info
+      latest = pypiData.info?.version ?? '';
+    }
+
     await context.globalState.update('specsmith.availableVersion', latest);
     _panel?.webview.postMessage({ type: 'versionInfo', available: latest });
   } catch (err) {

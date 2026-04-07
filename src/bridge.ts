@@ -76,8 +76,9 @@ function _isValidSpecsmith(execPath: string): boolean {
 /**
  * Find the best specsmith executable: the configured path or the first valid
  * one in known locations. 'Valid' means version >= 0.3.1 (has --json-events).
+ * Exported so GovernancePanel can use the same resolution logic.
  */
-function findSpecsmith(configured: string, envPath: string): string {
+export function findSpecsmith(configured: string, envPath: string): string {
   // 1. Try the configured path first
   if (_isValidSpecsmith(configured)) { return configured; }
 
