@@ -373,8 +373,13 @@ async function _handleMsg(msg: GovMsg): Promise<void> {
       break;
 
     case 'installUpdate': {
+      const channel = vscode.workspace.getConfiguration('specsmith').get<string>('releaseChannel', 'stable');
+      const isPre   = channel === 'pre-release';
+      const upgradeCmd = isPre
+        ? 'pipx install specsmith --pip-args="--pre" --force || pip install --pre --upgrade specsmith'
+        : 'pipx upgrade specsmith || pip install --upgrade specsmith';
       const term = vscode.window.createTerminal({ name: 'specsmith upgrade', shellPath: _shellPath() });
-      term.sendText('pipx upgrade specsmith || pip install --upgrade specsmith');
+      term.sendText(upgradeCmd);
       term.show();
       // Tell webview to swap Install→Reload button so user can reload when done
       _panel?.webview.postMessage({ type: 'installStarted' });

@@ -388,13 +388,20 @@ export function activate(context: vscode.ExtensionContext): void {
       const term = vscode.window.createTerminal({ name: 'specsmith install', shellPath: _shellPath() });
       term.show();
 
+      const channel = cfg.get<string>('releaseChannel', 'stable');
+      const isPre    = channel === 'pre-release';
       if (picked.label.includes('pipx') && isInstalled) {
-        term.sendText('pipx upgrade specsmith');
+        // --pre not supported by pipx upgrade; reinstall with force instead
+        term.sendText(isPre
+          ? 'pipx install specsmith --pip-args="--pre" --force'
+          : 'pipx upgrade specsmith');
       } else if (picked.label.includes('pipx')) {
-        term.sendText('pipx install "specsmith[anthropic]"');
+        term.sendText(isPre
+          ? 'pipx install "specsmith[anthropic]" --pip-args="--pre"'
+          : 'pipx install "specsmith[anthropic]"');
       } else {
         const flag = isInstalled ? '--upgrade' : '--user';
-        term.sendText(`pip install ${flag} "specsmith[anthropic]"`);
+        term.sendText(`pip install ${flag}${isPre ? ' --pre' : ''} "specsmith[anthropic]"`);
       }
 
       void vscode.window.showInformationMessage(

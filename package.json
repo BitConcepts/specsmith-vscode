@@ -1,13 +1,13 @@
 {
   "name": "specsmith-vscode",
   "displayName": "specsmith — AEE Workbench",
-  "description": "Applied Epistemic Engineering workbench. AI agent sessions with live model listing, requirements management, token monitoring, and governance tools.",
-"version": "0.3.2",
+  "description": "Applied Epistemic Engineering workbench. 6-tab Settings panel, AI agent sessions, execution profiles, FPGA/HDL tool support, Ollama local LLMs, and tool installer.",
+  "version": "0.3.3",
   "publisher": "BitConcepts",
   "license": "MIT",
   "engines": { "vscode": "^1.85.0" },
   "categories": ["AI", "Other"],
-  "keywords": ["ai", "agent", "epistemic", "requirements", "governance", "specsmith"],
+  "keywords": ["ai", "agent", "epistemic", "requirements", "governance", "specsmith", "fpga", "hdl", "ollama", "execution-profiles"],
   "icon": "media/specsmith-128.png",
   "repository": { "type": "git", "url": "https://github.com/BitConcepts/specsmith-vscode" },
   "activationEvents": ["onStartupFinished"],
@@ -131,6 +131,16 @@
             "128K tokens — 24GB+ VRAM (supported models only)"
           ],
           "description": "Ollama context window size (num_ctx). 0 = auto-detect from GPU VRAM. Session-specific: changing this takes effect when you open a new session."
+        },
+        "specsmith.releaseChannel": {
+          "type": "string",
+          "default": "stable",
+          "enum": ["stable", "pre-release"],
+          "enumDescriptions": [
+            "Latest stable release from PyPI (recommended). Uses pipx upgrade or pip install --upgrade.",
+            "Latest pre-release / dev build (0.x.y.devN). Cutting-edge features; may have rough edges. Uses pip install --pre."
+          ],
+          "description": "specsmith release channel. Controls which version is installed by the 'Install or Upgrade' command and the Install Update button in the Settings panel."
         }
       }
     }
