@@ -1,0 +1,13 @@
+# Default owner for all files
+* @tbitcs
+
+# Extension core
+src/ @tbitcs
+
+# Package manifest and build config
+package.json @tbitcs
+tsconfig.json @tbitcs
+esbuild.mjs @tbitcs
+
+# CI/CD and GitHub configuration
+.github/ @tbitcs
