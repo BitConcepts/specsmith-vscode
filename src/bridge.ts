@@ -18,24 +18,17 @@ import { SpecsmithEvent, SessionConfig, SessionStatus } from './types';
 
 /**
  * Return an env object with known pipx/pip bin directories prepended to PATH.
- * VS Code's Extension Host process may not inherit the user's full shell PATH,
- * so specsmith (installed via pipx) won't be found without this augmentation.
+ * VS Code's Extension Host process may not inherit the user's full shell PATH.
  */
 function augmentedEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const env = { ...base };
   const extra: string[] = [];
 
   if (process.platform === 'win32') {
-    const local = process.env.LOCALAPPDATA ?? path.join(os.homedir(), 'AppData', 'Local');
-    const roaming = process.env.APPDATA ?? path.join(os.homedir(), 'AppData', 'Roaming');
-    // Standard locations
-    extra.push(
-      path.join(local,   'pipx', 'bin'),                    // pipx default on Windows
-      path.join(local,   'Programs', 'Python', 'Scripts'),  // pip user (Python 3.11+)
-      path.join(roaming, 'Python', 'Scripts'),              // pip user (older Python)
-      path.join(os.homedir(), '.local', 'bin'),             // alternate pipx location
-    );
-    // Glob pythoncore-* subdirectories under %LOCALAPPDATA%\Python (non-store Python installs)
+    const local  = process.env.LOCALAPPDATA ?? path.join(os.homedir(), 'AppData', 'Local');
+    const roaming = process.env.APPDATA     ?? path.join(os.homedir(), 'AppData', 'Roaming');
+
+    // pythoncore-* FIRST (pip installs — typically newer than pipx)
     try {
       const pyBase = path.join(local, 'Python');
       if (fs.existsSync(pyBase)) {
@@ -46,17 +39,63 @@ function augmentedEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
         }
       }
     } catch { /* ignore */ }
-  } else {
-    // macOS / Linux
+
     extra.push(
-      path.join(os.homedir(), '.local', 'bin'),
-      '/usr/local/bin',
+      path.join(local,   'Programs', 'Python', 'Scripts'), // pip user (Python 3.11+)
+      path.join(roaming, 'Python', 'Scripts'),             // pip user (older Python)
+      path.join(os.homedir(), '.local', 'bin'),            // alternate pipx location
+      path.join(local,   'pipx', 'bin'),                   // pipx (last — may be older)
     );
+  } else {
+    extra.push(path.join(os.homedir(), '.local', 'bin'), '/usr/local/bin');
   }
 
   const current = env.PATH ?? '';
   env.PATH = [...extra, current].join(path.delimiter);
   return env;
+}
+
+/** Parse semver from 'specsmith, version X.Y.Z' string. Returns [maj,min,patch] or null. */
+function _parseVersion(s: string): [number, number, number] | null {
+  const m = s.match(/(\d+)\.(\d+)\.(\d+)/);
+  return m ? [+m[1], +m[2], +m[3]] : null;
+}
+
+/** Returns true if the executable is specsmith >= 0.3.1 (has --json-events). */
+function _isValidSpecsmith(execPath: string): boolean {
+  try {
+    const r = cp.spawnSync(execPath, ['--version'], { timeout: 4000, encoding: 'utf8' });
+    if (r.status !== 0) { return false; }
+    const ver = _parseVersion(r.stdout ?? '');
+    if (!ver) { return false; }
+    const [maj, min, patch] = ver;
+    return (maj > 0) || (min > 3) || (min === 3 && patch >= 1);
+  } catch { return false; }
+}
+
+/**
+ * Find the best specsmith executable: the configured path or the first valid
+ * one in known locations. 'Valid' means version >= 0.3.1 (has --json-events).
+ */
+function findSpecsmith(configured: string, envPath: string): string {
+  // 1. Try the configured path first
+  if (_isValidSpecsmith(configured)) { return configured; }
+
+  // 2. Scan all PATH directories for a valid specsmith
+  const exeNames = process.platform === 'win32'
+    ? ['specsmith.exe', 'specsmith.bat', 'specsmith.cmd']
+    : ['specsmith'];
+
+  for (const dir of envPath.split(path.delimiter)) {
+    for (const name of exeNames) {
+      const candidate = path.join(dir, name);
+      if (fs.existsSync(candidate) && _isValidSpecsmith(candidate)) {
+        return candidate;
+      }
+    }
+  }
+
+  return configured; // fallback — will fail with a useful error
 }
 
 const TURN_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes per turn
@@ -185,24 +224,30 @@ export class SpecsmithBridge {
       env.SPECSMITH_OLLAMA_NUM_CTX = String(this._ollamaCtx);
     }
 
+    // Find the best specsmith executable (version >= 0.3.1 with --json-events)
+    const execPath = findSpecsmith(this._execPath, env.PATH ?? '');
+    if (execPath !== this._execPath) {
+      this._emit({ type: 'system', message: `Using specsmith at: ${execPath}` });
+    }
+
     // Warn if specsmith hasn't emitted 'ready' within 20 seconds
     this._startupTimer = setTimeout(() => {
       if (!this._ready) {
         this._emit({
           type: 'error',
           message:
-            `specsmith not responding (tried: "${this._execPath}")\n` +
+            `specsmith not responding (tried: "${execPath}")\n` +
             'To fix:\n' +
-            '  • Ctrl+Shift+P → specsmith: Install or Upgrade\n' +
-            '  • Or set specsmith.executablePath in VS Code settings\n' +
-            '  • On Windows / pipx the exe is usually:\n' +
-            '    %LOCALAPPDATA%\\pipx\\bin\\specsmith.exe',
+            '  \u2022 Ctrl+Shift+P \u2192 specsmith: Install or Upgrade\n' +
+            '  \u2022 Or set specsmith.executablePath in VS Code settings\n' +
+            '  \u2022 On Windows / pip install path:\n' +
+            '    %LOCALAPPDATA%\\Python\\pythoncore-3.12-64\\Scripts\\specsmith.exe',
         });
         this._setStatus('error');
       }
     }, 20_000);
 
-    this._proc = cp.spawn(this._execPath, args, {
+    this._proc = cp.spawn(execPath, args, {
       cwd: this._config.projectDir,
       stdio: ['pipe', 'pipe', 'pipe'],
       env,

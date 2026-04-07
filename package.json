@@ -14,7 +14,7 @@
   "main": "./out/extension.js",
   "contributes": {
     "viewsContainers": {
-      "activitybar": [{ "id": "specsmith", "title": "specsmith AEE", "icon": "media/specsmith.svg" }]
+      "secondarySideBar": [{ "id": "specsmith", "title": "specsmith AEE", "icon": "media/specsmith.svg" }]
     },
     "views": {
       "specsmith": [
