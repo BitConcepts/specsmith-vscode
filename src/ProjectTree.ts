@@ -42,7 +42,8 @@ const GOV_DOCS: Array<{ rel: string; icon: string }> = [
   { rel: 'REQUIREMENTS.md',       icon: 'list-unordered' },
   { rel: 'docs/REQUIREMENTS.md',  icon: 'list-unordered' },
   { rel: 'AGENTS.md',             icon: 'hubot'          },
-  { rel: 'docs/architecture.md',  icon: 'file-code'      },
+  { rel: 'docs/ARCHITECTURE.md',  icon: 'file-code'      },
+  { rel: 'docs/architecture.md',  icon: 'file-code'      }, // legacy lowercase
   { rel: 'docs/TEST_SPEC.md',     icon: 'beaker'         },
   { rel: 'LEDGER.md',             icon: 'history'        },
   { rel: 'scaffold.yml',          icon: 'settings-gear'  },

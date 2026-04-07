@@ -529,7 +529,10 @@ export function activate(context: vscode.ExtensionContext): void {
       showGovernancePanel(
         context,
         projectDir,
-        (text) => session?.sendCommand(text) ?? void vscode.window.showWarningMessage('Open a session first to use AI prompts.'),
+        // sendToSession: uses current session or last opened
+        (text) => { SessionPanel.current()?.sendCommand(text); },
+        // openSession: auto-creates a session for this project
+        async () => { await openSession(projectDir); },
       );
     }),
   );
