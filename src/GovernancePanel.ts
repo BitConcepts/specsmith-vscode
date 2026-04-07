@@ -87,8 +87,8 @@ interface GovMsg {
 
 const LANGUAGES = [
   'Python','Rust','Go','C','C++','TypeScript','JavaScript','C#','Swift','Kotlin',
-  'VHDL','SystemVerilog','Dart','Java','Ruby','PHP','Scala','Haskell','Lua','Bash',
-  'YAML','Makefile',
+  'VHDL','SystemVerilog','Dart','Java','Ruby','PHP','Scala','Haskell','Lua',
+  'Bash','PowerShell','Cmd','BitBake','YAML','Makefile','SQL','Zig','Nim',
 ];
 
 const VCS_PLATFORMS = ['github','gitlab','bitbucket','azure-devops','gitea','none'];
@@ -170,7 +170,7 @@ function _loadProjectData(projectDir: string): ProjectData {
   }
 
   const govFiles: GovFile[] = GOV_FILES
-    .map(({ rel, label, addType }) => {
+    .flatMap(({ rel, label, addType }) => {
       const fp = path.join(projectDir, rel);
       const exists = fs.existsSync(fp);
       let lines: number | undefined;
@@ -179,11 +179,10 @@ function _loadProjectData(projectDir: string): ProjectData {
       }
       // Skip lowercase architecture.md if uppercase exists (avoid duplicate)
       if (rel === 'docs/architecture.md' && fs.existsSync(path.join(projectDir, 'docs/ARCHITECTURE.md'))) {
-        return null;
+        return [];
       }
-      return { rel, label, uppercase: label === label.toUpperCase() || label.startsWith('scaffold'), exists, lines, addCmd: addType };
-    })
-    .filter((f): f is GovFile => f !== null);
+      return [{ rel, label, uppercase: label === label.toUpperCase() || label.startsWith('scaffold'), exists, lines, addCmd: addType } as GovFile];
+    });
 
   // Probe installed specsmith version
   let installedVersion: string | null = null;
@@ -249,9 +248,18 @@ async function _handleMsg(
       _refreshPanel(projectDir, sendToSession, openSession);
       break;
 
-    case 'addFile':
+case 'addFile':
       await _addGovFile(context, projectDir, msg.addType ?? '', sendToSession, openSession);
       _refreshPanel(projectDir, sendToSession, openSession);
+      break;
+
+    case 'detectLanguages' as GovMsg['command']:
+      _detectAndSetLanguages(projectDir);
+      _refreshPanel(projectDir, sendToSession, openSession);
+      break;
+
+    case 'runUpgrade' as GovMsg['command']:
+      await _runUpgradeAndRefresh(projectDir, sendToSession, openSession);
       break;
   }
 }
@@ -354,15 +362,139 @@ async function _addGovFile(
   }
 }
 
+// ── Language detection ──────────────────────────────────────────────────────
+
+const EXT_LANG: Record<string, string> = {
+  '.py': 'Python', '.rs': 'Rust', '.go': 'Go', '.c': 'C', '.cpp': 'C++',
+  '.cc': 'C++', '.cxx': 'C++', '.h': 'C', '.hpp': 'C++', '.ts': 'TypeScript',
+  '.tsx': 'TypeScript', '.js': 'JavaScript', '.jsx': 'JavaScript', '.cs': 'C#',
+  '.swift': 'Swift', '.kt': 'Kotlin', '.vhd': 'VHDL', '.vhdl': 'VHDL',
+  '.sv': 'SystemVerilog', '.v': 'SystemVerilog', '.dart': 'Dart', '.java': 'Java',
+  '.rb': 'Ruby', '.php': 'PHP', '.sh': 'Bash', '.bash': 'Bash',
+  '.ps1': 'PowerShell', '.cmd': 'Cmd', '.bb': 'BitBake', '.bbappend': 'BitBake',
+  '.zig': 'Zig',
+};
+
+const SKIP_DIRS = new Set(['node_modules', '.git', '.venv', '__pycache__', 'dist', 'out', 'build', '.specsmith']);
+
+/** Scan projectDir for file extensions and patch languages in scaffold.yml. */
+function _detectAndSetLanguages(projectDir: string): void {
+  const detected = new Set<string>();
+  function scan(dir: string, depth: number): void {
+    if (depth > 4) { return; }
+    let entries: string[];
+    try { entries = fs.readdirSync(dir); } catch { return; }
+    for (const e of entries) {
+      if (SKIP_DIRS.has(e)) { continue; }
+      const full = path.join(dir, e);
+      let stat: ReturnType<typeof fs.statSync> | undefined;
+      try { stat = fs.statSync(full); } catch { continue; }
+      if (stat.isDirectory()) { scan(full, depth + 1); }
+      else {
+        const lang = EXT_LANG[path.extname(e).toLowerCase()];
+        if (lang) { detected.add(lang); }
+      }
+    }
+  }
+  scan(projectDir, 0);
+  if (!detected.size) {
+    void vscode.window.showInformationMessage('No recognisable language files found in project.');
+    return;
+  }
+  // Merge with existing scaffold.yml languages list
+  const scaffoldPath = path.join(projectDir, 'scaffold.yml');
+  if (!fs.existsSync(scaffoldPath)) {
+    void vscode.window.showWarningMessage('scaffold.yml not found — run specsmith init first.');
+    return;
+  }
+  let lines = fs.readFileSync(scaffoldPath, 'utf8').split('\n');
+  const langs = [...detected].sort();
+  lines = _replaceYamlSection(lines, 'languages', langs);
+  fs.writeFileSync(scaffoldPath, lines.join('\n'), 'utf8');
+  void vscode.window.showInformationMessage(`Detected & saved languages: ${langs.join(', ')}`);
+}
+
+/** Run specsmith upgrade in a terminal, then refresh the governance panel. */
+async function _runUpgradeAndRefresh(
+  projectDir: string,
+  sendToSession: (t: string) => void,
+  openSession: () => Promise<void>,
+): Promise<void> {
+  const cfg  = vscode.workspace.getConfiguration('specsmith');
+  const exec = cfg.get<string>('executablePath', 'specsmith');
+  const term = vscode.window.createTerminal({ name: 'specsmith upgrade', cwd: projectDir });
+  term.sendText(`${exec} upgrade --project-dir "${projectDir}"`);
+  term.show();
+  // Wait briefly, then reload — user can press Refresh again when terminal completes
+  await new Promise<void>((r) => setTimeout(r, 2500));
+  _refreshPanel(projectDir, sendToSession, openSession);
+}
+
+/** Safe line-based YAML section replacer — handles both indented and unindented list items. */
+function _replaceYamlSection(
+  lines: string[],
+  key: string,
+  newValue: string | string[],
+): string[] {
+  const result: string[] = [];
+  let i = 0;
+  let replaced = false;
+
+  // Also handle legacy singular form (language -> languages)
+  const altKey = key === 'languages' ? 'language' : null;
+
+  while (i < lines.length) {
+    const line = lines[i];
+    const keyRe = new RegExp(`^(${key}${altKey ? `|${altKey}` : ''}):`);
+    if (keyRe.test(line) && !replaced) {
+      replaced = true;
+      i++; // skip the key line
+      // Skip all list items that belong to this block (indented OR unindented '-')
+      while (i < lines.length) {
+        const next = lines[i];
+        if (next.match(/^[ \t]*-/) || next.match(/^[ \t]+\S/)) {
+          i++;
+        } else {
+          break;
+        }
+      }
+      // Write new value
+      if (Array.isArray(newValue) && newValue.length > 0) {
+        result.push(`${key}:`);
+        for (const v of newValue) { result.push(`  - ${v}`); }
+      } else if (typeof newValue === 'string' && newValue) {
+        result.push(`${key}: ${newValue}`);
+      }
+    } else {
+      result.push(line);
+      i++;
+    }
+  }
+
+  // Append if key was not found in the file
+  if (!replaced) {
+    if (Array.isArray(newValue) && newValue.length > 0) {
+      result.push(`${key}:`);
+      for (const v of newValue) { result.push(`  - ${v}`); }
+    } else if (typeof newValue === 'string' && newValue) {
+      result.push(`${key}: ${newValue}`);
+    }
+  }
+
+  return result;
+}
+
 function _saveScaffold(projectDir: string, scaffold: ScaffoldData): void {
   const p = path.join(projectDir, 'scaffold.yml');
   if (!fs.existsSync(p)) {
     void vscode.window.showWarningMessage('scaffold.yml not found — run specsmith init first');
     return;
   }
-  let raw = fs.readFileSync(p, 'utf8');
 
-  // Update scalar fields
+  // Use line-based replacement to avoid YAML corruption
+  let lines = fs.readFileSync(p, 'utf8').split('\n');
+
+  // Scalar fields
   const scalars: Record<string, string> = {
     name:         scaffold.name        ?? '',
     type:         scaffold.type        ?? '',
@@ -370,32 +502,21 @@ function _saveScaffold(projectDir: string, scaffold: ScaffoldData): void {
     vcs_platform: scaffold.vcs_platform ?? '',
   };
   for (const [key, val] of Object.entries(scalars)) {
-    if (val) {
-      const re = new RegExp(`^(${key}:)\\s*.+$`, 'm');
-      if (re.test(raw)) { raw = raw.replace(re, `$1 ${val}`); }
-    }
+    if (val) { lines = _replaceYamlSection(lines, key, val); }
   }
 
-  // Update list fields (languages, integrations, platforms)
+  // List fields
   const lists: Record<string, string[]> = {
     languages:    scaffold.languages    ?? [],
     integrations: scaffold.integrations ?? [],
     platforms:    scaffold.platforms    ?? [],
   };
   for (const [key, vals] of Object.entries(lists)) {
-    if (vals.length > 0) {
-      const listYaml = `${key}:\n${vals.map(v => `  - ${v}`).join('\n')}`;
-      const re = new RegExp(`^${key}:[^\\n]*(?:\\n(?:[ \\t]+- .+)?)*`, 'm');
-      if (re.test(raw)) {
-        raw = raw.replace(re, listYaml);
-      } else {
-        raw += `\n${listYaml}`;
-      }
-    }
+    if (vals.length > 0) { lines = _replaceYamlSection(lines, key, vals); }
   }
 
-  fs.writeFileSync(p, raw, 'utf8');
-  void vscode.window.showInformationMessage('scaffold.yml saved. Run specsmith upgrade to apply changes.');
+  fs.writeFileSync(p, lines.join('\n'), 'utf8');
+  void vscode.window.showInformationMessage('scaffold.yml saved.');
 }
 
 // ── HTML ──────────────────────────────────────────────────────────────────────
