@@ -106,13 +106,27 @@ export class SessionPanel implements vscode.Disposable {
       if (savedKeyPresent) {
         provider = saved.provider;
         model    = saved.model;
-        // For Ollama: validate the saved model is actually installed
-        // (prevents stale 'o4-mini' or other cloud model names causing 404)
+        // For Ollama: resolve the saved model to the EXACT installed ID.
+        // Avoids 404 when model was pulled under a quantization-tagged name
+        // (e.g. 'qwen2.5:14b-instruct-q4_K_M') but session saved 'qwen2.5:14b'.
         if (saved.provider === 'ollama' && saved.model) {
           const { OllamaManager: _OM } = await import('./OllamaManager');
           const installed = await _OM.getInstalledIds();
-          if (!installed.some((id) => id === saved.model || id.startsWith(saved.model.split(':')[0]))) {
-            model = ''; // reset — auto-detect will pick the right installed model below
+          if (installed.includes(saved.model)) {
+            model = saved.model;                          // exact match — use as-is
+          } else {
+            // Fuzzy: find installed names that start with the base tag
+            const base   = saved.model.split(':')[0];     // 'qwen2.5'
+            const short  = saved.model;                   // 'qwen2.5:14b'
+            const hits   = installed.filter(
+              (id) => id.startsWith(base + ':') || id.startsWith(short),
+            );
+            if (hits.length > 0) {
+              // Prefer shortest (= default quant tag Ollama uses)
+              model = hits.reduce((a, b) => (a.length <= b.length ? a : b));
+            } else {
+              model = ''; // not installed at all — auto-detect below
+            }
           }
         }
       }

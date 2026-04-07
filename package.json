@@ -112,6 +112,11 @@
           "type": "array", "items": { "type": "string" }, "default": [],
           "description": "Project directories to persist in the sidebar."
         },
+        "specsmith.autoOpenGovernancePanel": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically open the Governance panel when VS Code starts with a workspace folder."
+        },
         "specsmith.ollamaContextLength": {
           "type": "number",
           "default": 0,

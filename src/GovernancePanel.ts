@@ -1,23 +1,21 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 BitConcepts, LLC. All rights reserved.
 /**
- * GovernancePanel v2 — AI-assisted governance file management.
+ * GovernancePanel v3 — 5-tab AI-assisted governance workbench.
  *
- * Features:
- *  - scaffold.yml structured form (project type, multiple languages, platforms, integrations, VCS)
- *  - Out-of-date detection: spec_version vs installed specsmith version
- *  - Governance file status with Add buttons for missing files
- *  - Quick actions grid (audit, validate, doctor, export, etc.)
- *  - AI prompt palette → routes prompts to the active agent session
- *  - Auto-opens a session if none is active when AI prompts are clicked
- *  - Refresh button to reload all data
+ * Tabs:  Project | Tools | Files | Updates & System | Actions & AI
  */
 import * as vscode from 'vscode';
 import * as cp from 'child_process';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 
 let _panel: vscode.WebviewPanel | undefined;
+let _ctx: vscode.ExtensionContext | undefined;
+let _projectDir: string | undefined;
+let _sendFn: ((t: string) => void) | undefined;
+let _openFn: (() => Promise<void>) | undefined;
 
 export function showGovernancePanel(
   context: vscode.ExtensionContext,
@@ -25,9 +23,14 @@ export function showGovernancePanel(
   sendToSession: (text: string) => void,
   openSession: () => Promise<void>,
 ): void {
+  _ctx        = context;
+  _projectDir = projectDir;
+  _sendFn     = sendToSession;
+  _openFn     = openSession;
+
   if (_panel) {
     _panel.reveal(vscode.ViewColumn.Beside);
-    _refreshPanel(projectDir, sendToSession, openSession);
+    _reload();
     return;
   }
 
@@ -38,56 +41,48 @@ export function showGovernancePanel(
     { enableScripts: true, retainContextWhenHidden: true },
   );
 
-  _panel.webview.html = _html(_loadProjectData(projectDir));
+  _reload();
 
   _panel.webview.onDidReceiveMessage(
-    (msg: GovMsg) => _handleMsg(context, msg, projectDir, sendToSession, openSession),
+    (msg: GovMsg) => void _handleMsg(msg),
     null,
     context.subscriptions,
   );
 
-  _panel.onDidDispose(() => { _panel = undefined; }, null, context.subscriptions);
+  _panel.onDidDispose(() => {
+    _panel = undefined;
+    _ctx = undefined;
+  }, null, context.subscriptions);
 }
 
-function _refreshPanel(
-  projectDir: string,
-  sendToSession: (text: string) => void,
-  openSession: () => Promise<void>,
-): void {
-  if (!_panel) { return; }
-  _panel.webview.html = _html(_loadProjectData(projectDir));
+function _reload(): void {
+  if (!_panel || !_ctx || !_projectDir) { return; }
+  _panel.webview.html = _html(_loadProjectData(_projectDir, _ctx));
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 interface ScaffoldData {
-  name?: string;
-  type?: string;
-  languages?: string[];     // multi-language support
-  description?: string;
-  vcs_platform?: string;
-  spec_version?: string;
-  integrations?: string[];
-  platforms?: string[];
+  name?: string; type?: string; description?: string; vcs_platform?: string; spec_version?: string;
+  languages?: string[]; integrations?: string[]; platforms?: string[]; fpga_tools?: string[];
 }
-
-interface GovFile { rel: string; label: string; uppercase: boolean; exists: boolean; lines?: number; addCmd?: string; }
-interface ProjectData { projectDir: string; scaffold: ScaffoldData; govFiles: GovFile[]; installedVersion: string | null; }
-
+interface GovFile { rel: string; label: string; exists: boolean; lines?: number; addCmd?: string; }
+interface ProjectData {
+  projectDir: string; scaffold: ScaffoldData; govFiles: GovFile[];
+  installedVersion: string | null; availableVersion: string | null; lastUpdateCheck: string | null;
+}
 interface GovMsg {
-  command: 'saveScaffold' | 'runCommand' | 'sendToAgent' | 'openFile' | 'refresh' | 'addFile';
-  scaffold?: ScaffoldData;
-  cmd?: string;
-  prompt?: string;
-  file?: string;
-  addType?: string;
+  command:
+    | 'saveScaffold' | 'runCommand' | 'sendToAgent' | 'openFile' | 'refresh'
+    | 'addFile' | 'checkVersion' | 'installUpdate' | 'getSysInfo' | 'detectLanguages';
+  scaffold?: ScaffoldData; cmd?: string; prompt?: string; file?: string; addType?: string;
 }
 
-// ── Supported values ───────────────────────────────────────────────────────────
+// ── Constants ─────────────────────────────────────────────────────────────────
 
 const LANGUAGES = [
   'Python','Rust','Go','C','C++','TypeScript','JavaScript','C#','Swift','Kotlin',
-  'VHDL','SystemVerilog','Dart','Java','Ruby','PHP','Scala','Haskell','Lua',
+  'VHDL','SystemVerilog','Verilog','Dart','Java','Ruby','PHP','Scala','Haskell','Lua',
   'Bash','PowerShell','Cmd','BitBake','YAML','Makefile','SQL','Zig','Nim',
 ];
 
@@ -95,502 +90,421 @@ const VCS_PLATFORMS = ['github','gitlab','bitbucket','azure-devops','gitea','non
 
 const PROJECT_TYPES = [
   'cli-python','lib-python','web-backend-python','web-fullstack','web-frontend',
-  'cli-rust','lib-rust','web-backend-rust','cli-go','lib-go','cli-node','lib-node',
-  'cli-cpp','lib-cpp','embedded-c','embedded-cpp','fpga-rtl','mobile-ios',
-  'mobile-android','mobile-flutter','dotnet-cli','dotnet-lib','dotnet-web',
-  'microservice','data-pipeline','ml-model','research-academic','patent-application',
-  'legal-contract','business-strategy','project-management','yocto-bsp',
+  'cli-rust','lib-rust','cli-go','lib-go','cli-node','lib-node',
+  'cli-cpp','lib-cpp','embedded-c','embedded-cpp',
+  'fpga-rtl-xilinx','fpga-rtl-intel','fpga-rtl-lattice','fpga-rtl-generic',
+  'mobile-ios','mobile-android','mobile-flutter',
+  'dotnet-cli','dotnet-lib','dotnet-web',
+  'microservice','data-pipeline','ml-model',
+  'research-academic','patent-application','legal-contract',
+  'business-strategy','project-management','yocto-bsp',
 ];
 
 const INTEGRATIONS = ['warp','claude','cursor','copilot','aider','continue'];
-const PLATFORMS    = ['linux','windows','macos','embedded','cloud','wasm'];
+const PLATFORMS    = ['linux','windows','macos','embedded','cloud','wasm','xilinx-fpga','intel-fpga','lattice-fpga'];
 
-// Governance files — all uppercase per convention
-const GOV_FILES: Array<{ rel: string; label: string; addType: string }> = [
-  { rel: 'scaffold.yml',         label: 'scaffold.yml',      addType: 'scaffold'      },
-  { rel: 'AGENTS.md',            label: 'AGENTS.md',         addType: 'agents'        },
-  { rel: 'REQUIREMENTS.md',      label: 'REQUIREMENTS.md',   addType: 'requirements'  },
-  { rel: 'docs/REQUIREMENTS.md', label: 'docs/REQUIREMENTS.md', addType: 'requirements' },
-  { rel: 'docs/TEST_SPEC.md',    label: 'TEST_SPEC.md',      addType: 'test_spec'     },
-  { rel: 'docs/ARCHITECTURE.md', label: 'ARCHITECTURE.md',   addType: 'architecture'  },
-  // Legacy lowercase (read-only, shown if exists)
-  { rel: 'docs/architecture.md', label: 'architecture.md ⚠ (rename to UPPERCASE)', addType: 'rename' },
-  { rel: 'LEDGER.md',            label: 'LEDGER.md',         addType: 'ledger'        },
+/** Tool-agnostic FPGA/HDL toolchain catalog. */
+const FPGA_TOOLS = [
+  // Synthesis & Implementation
+  'vivado','quartus','radiant','diamond','gowin',
+  // Simulation
+  'ghdl','iverilog','verilator','modelsim','questasim','xsim',
+  // Waveform viewers
+  'gtkwave','surfer',
+  // Linting / Style
+  'vsg','verible','svlint',
+  // Formal
+  'symbiyosys',
+  // Open-source flow
+  'yosys','nextpnr','openFPGALoader',
 ];
 
-const PROMPT_PALETTE = [
-  { label: '📋 Review requirements',  prompt: 'Review REQUIREMENTS.md and identify gaps, ambiguities, or missing test coverage. Suggest improvements with specific REQ IDs.' },
+const GOV_FILES = [
+  { rel: 'scaffold.yml',         label: 'scaffold.yml',             addType: 'scaffold'     },
+  { rel: 'AGENTS.md',            label: 'AGENTS.md',                addType: 'agents'       },
+  { rel: 'REQUIREMENTS.md',      label: 'REQUIREMENTS.md',          addType: 'requirements' },
+  { rel: 'docs/REQUIREMENTS.md', label: 'docs/REQUIREMENTS.md',     addType: 'requirements' },
+  { rel: 'docs/TEST_SPEC.md',    label: 'TEST_SPEC.md',             addType: 'test_spec'    },
+  { rel: 'docs/ARCHITECTURE.md', label: 'ARCHITECTURE.md',          addType: 'architecture' },
+  { rel: 'docs/architecture.md', label: 'architecture.md ⚠ rename', addType: 'rename'       },
+  { rel: 'LEDGER.md',            label: 'LEDGER.md',                addType: 'ledger'       },
+];
+
+const PROMPTS = [
+  { label: '📋 Review requirements',  prompt: 'Review REQUIREMENTS.md and identify gaps, ambiguities, or missing test coverage.' },
   { label: '🔍 Run full audit',        prompt: 'Run specsmith audit and fix any issues found. Report exactly what changed.' },
-  { label: '✅ Check REQ coverage',    prompt: 'Check that every requirement in REQUIREMENTS.md has a corresponding test in TEST_SPEC.md. List any uncovered requirements with their IDs.' },
-  { label: '📐 Improve ARCHITECTURE', prompt: 'Review docs/ARCHITECTURE.md (or docs/architecture.md) and suggest improvements based on the current codebase. Update the file with your suggestions.' },
-  { label: '📝 Update LEDGER',         prompt: 'Write a LEDGER.md entry summarising the work done this session. Include: what changed, what was tested, next steps, and any open TODOs.' },
-  { label: '🧠 Epistemic audit',       prompt: 'Run specsmith epistemic-audit and report the belief certainty scores. Identify the lowest-confidence requirements and suggest how to improve them.' },
-  { label: '⚡ Stress test REQs',      prompt: 'Run specsmith stress-test on REQUIREMENTS.md. Apply adversarial challenges and report any failure modes or logic knots found.' },
-  { label: '🔄 Upgrade governance',    prompt: 'Run specsmith upgrade to the latest spec version. Report what templates were regenerated and what changed.' },
-  { label: '📦 Export compliance',     prompt: 'Run specsmith export and save the compliance report to docs/COMPLIANCE.md.' },
-  { label: '🏗 Generate architecture', prompt: 'Run specsmith architect --non-interactive to generate an architecture document. Review and update docs/ARCHITECTURE.md.' },
+  { label: '✅ Check REQ coverage',    prompt: 'Check that every requirement has a corresponding test in TEST_SPEC.md.' },
+  { label: '📐 Improve ARCHITECTURE', prompt: 'Review docs/ARCHITECTURE.md and update it based on the current codebase.' },
+  { label: '📝 Update LEDGER',         prompt: 'Write a LEDGER.md entry: what changed, what was tested, next steps, open TODOs.' },
+  { label: '🧠 Epistemic audit',       prompt: 'Run specsmith epistemic-audit. Report low-confidence requirements.' },
+  { label: '⚡ Stress test REQs',      prompt: 'Run specsmith stress-test on REQUIREMENTS.md. Report failure modes.' },
+  { label: '🔄 Upgrade governance',    prompt: 'Run specsmith upgrade to the latest spec version. Report what changed.' },
+  { label: '📦 Export compliance',     prompt: 'Run specsmith export and save the report to docs/COMPLIANCE.md.' },
+  { label: '🏗 Generate architecture', prompt: 'Run specsmith architect --non-interactive and update docs/ARCHITECTURE.md.' },
 ];
 
 // ── Data loading ───────────────────────────────────────────────────────────────
 
-function _loadProjectData(projectDir: string): ProjectData {
+function _loadProjectData(projectDir: string, context: vscode.ExtensionContext): ProjectData {
   const scaffoldPath = path.join(projectDir, 'scaffold.yml');
   let scaffold: ScaffoldData = {};
 
   if (fs.existsSync(scaffoldPath)) {
     try {
       const raw = fs.readFileSync(scaffoldPath, 'utf8');
-      // Parse scalar fields
       for (const line of raw.split('\n')) {
         const m = line.match(/^(\w+):\s*(.+)$/);
-        if (m) {
-          const [, key, val] = m;
-          if (!['integrations','platforms','languages'].includes(key)) {
-            (scaffold as Record<string, string>)[key] = val.replace(/^["']|["']$/g, '').trim();
-          }
+        if (m && !['integrations','platforms','languages','fpga_tools'].includes(m[1])) {
+          (scaffold as Record<string, string>)[m[1]] = m[2].replace(/^["']|["']$/g, '').trim();
         }
       }
-      // Parse list fields
-      for (const field of ['integrations', 'platforms', 'languages']) {
-        const re = new RegExp(`^${field}:\\s*\\n((?:[ \\t]*- .+\\n?)+)`, 'm');
-        const m2 = raw.match(re);
-        if (m2) {
-          (scaffold as Record<string, string[]>)[field] = m2[1].match(/- (.+)/g)?.map(l => l.slice(2).trim()) ?? [];
-        }
-        // Also handle inline: languages: python (single value, legacy)
-        const inline = raw.match(new RegExp(`^${field}:\\s*([^\\n]+)$`, 'm'));
-        if (inline && !(scaffold as Record<string, unknown>)[field]) {
-          const val = inline[1].trim();
-          if (!val.startsWith('-')) {
-            (scaffold as Record<string, string[]>)[field] = [val];
-          }
+      for (const field of ['integrations','platforms','languages','fpga_tools']) {
+        const re  = new RegExp(`^${field}:\\s*\\n((?:[ \\t]*- .+\\n?)+)`, 'm');
+        const m2  = raw.match(re);
+        if (m2) { (scaffold as Record<string, string[]>)[field] = m2[1].match(/- (.+)/g)?.map(l => l.slice(2).trim()) ?? []; }
+        const inl = raw.match(new RegExp(`^${field}:\\s*([^\\n]+)$`, 'm'));
+        if (inl && !(scaffold as Record<string, unknown>)[field]) {
+          const v = inl[1].trim();
+          if (!v.startsWith('-')) { (scaffold as Record<string, string[]>)[field] = [v]; }
         }
       }
     } catch { /* ignore */ }
   }
 
-  const govFiles: GovFile[] = GOV_FILES
-    .flatMap(({ rel, label, addType }) => {
-      const fp = path.join(projectDir, rel);
-      const exists = fs.existsSync(fp);
-      let lines: number | undefined;
-      if (exists) {
-        try { lines = fs.readFileSync(fp, 'utf8').split('\n').length; } catch { /* ignore */ }
-      }
-      // Skip lowercase architecture.md if uppercase exists (avoid duplicate)
-      if (rel === 'docs/architecture.md' && fs.existsSync(path.join(projectDir, 'docs/ARCHITECTURE.md'))) {
-        return [];
-      }
-      return [{ rel, label, uppercase: label === label.toUpperCase() || label.startsWith('scaffold'), exists, lines, addCmd: addType } as GovFile];
-    });
+  const govFiles: GovFile[] = GOV_FILES.flatMap(({ rel, label, addType }) => {
+    if (rel === 'docs/architecture.md' && fs.existsSync(path.join(projectDir, 'docs/ARCHITECTURE.md'))) { return []; }
+    const fp = path.join(projectDir, rel);
+    const exists = fs.existsSync(fp);
+    let lines: number | undefined;
+    if (exists) { try { lines = fs.readFileSync(fp, 'utf8').split('\n').length; } catch { /* ignore */ } }
+    return [{ rel, label, exists, lines, addCmd: addType } as GovFile];
+  });
 
-  // Probe installed specsmith version
   let installedVersion: string | null = null;
   try {
-    const cfg = vscode.workspace.getConfiguration('specsmith');
-    const exec = cfg.get<string>('executablePath', 'specsmith');
-    const r = cp.spawnSync(exec, ['--version'], { timeout: 3000, encoding: 'utf8' });
-    if (r.status === 0) {
-      const m = (r.stdout ?? '').match(/(\d+\.\d+\.\d+)/);
-      installedVersion = m ? m[1] : null;
-    }
+    const exec = vscode.workspace.getConfiguration('specsmith').get<string>('executablePath', 'specsmith');
+    const r    = cp.spawnSync(exec, ['--version'], { timeout: 3000, encoding: 'utf8' });
+    if (r.status === 0) { const m = (r.stdout ?? '').match(/(\d+\.\d+\.\d+)/); installedVersion = m?.[1] ?? null; }
   } catch { /* ignore */ }
 
-  return { projectDir, scaffold, govFiles, installedVersion };
+  const avail     = context.globalState.get<string>('specsmith.availableVersion', '');
+  const checkMs   = context.globalState.get<number>('specsmith.lastVersionCheck', 0);
+  const lastCheck = checkMs ? new Date(checkMs).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : null;
+
+  return { projectDir, scaffold, govFiles, installedVersion, availableVersion: avail || null, lastUpdateCheck: lastCheck };
 }
 
 // ── Message handler ────────────────────────────────────────────────────────────
 
-async function _handleMsg(
-  context: vscode.ExtensionContext,
-  msg: GovMsg,
-  projectDir: string,
-  sendToSession: (text: string) => void,
-  openSession: () => Promise<void>,
-): Promise<void> {
+async function _handleMsg(msg: GovMsg): Promise<void> {
+  if (!_ctx || !_projectDir || !_sendFn || !_openFn) { return; }
+
   switch (msg.command) {
     case 'saveScaffold':
-      if (msg.scaffold) { _saveScaffold(projectDir, msg.scaffold); }
+      if (msg.scaffold) { _saveScaffold(_projectDir, msg.scaffold); }
       break;
 
     case 'runCommand': {
-      const cfg  = vscode.workspace.getConfiguration('specsmith');
-      const exec = cfg.get<string>('executablePath', 'specsmith');
-      const term = vscode.window.createTerminal({ name: 'specsmith governance', cwd: projectDir });
-      term.sendText(`${exec} ${msg.cmd} --project-dir "${projectDir}"`);
+      const exec = vscode.workspace.getConfiguration('specsmith').get<string>('executablePath', 'specsmith');
+      const term = vscode.window.createTerminal({ name: 'specsmith', cwd: _projectDir });
+      term.sendText(`${exec} ${msg.cmd} --project-dir "${_projectDir}"`);
       term.show();
       break;
     }
 
-    case 'sendToAgent':
-      if (msg.prompt) {
-        // Auto-open session if none is active
-        const { SessionPanel } = await import('./SessionPanel');
-        if (!SessionPanel.current()) {
-          await openSession();
-          // Small delay to let session initialise before sending
-          await new Promise((r) => setTimeout(r, 2000));
-        }
-        sendToSession(msg.prompt);
+    case 'sendToAgent': {
+      if (!msg.prompt) { break; }
+      const { SessionPanel } = await import('./SessionPanel');
+      if (!SessionPanel.current()) {
+        await _openFn();
+        await new Promise((r) => setTimeout(r, 2000));
       }
+      _sendFn(msg.prompt);
       break;
+    }
 
     case 'openFile':
       if (msg.file) {
-        const fp = path.join(projectDir, msg.file);
-        if (fs.existsSync(fp)) {
-          void vscode.window.showTextDocument(vscode.Uri.file(fp));
-        }
+        const fp = path.join(_projectDir, msg.file);
+        if (fs.existsSync(fp)) { void vscode.window.showTextDocument(vscode.Uri.file(fp)); }
       }
       break;
 
-    case 'refresh':
-      _refreshPanel(projectDir, sendToSession, openSession);
+    case 'refresh': _reload(); break;
+
+    case 'addFile':
+      await _addGovFile(_ctx, _projectDir, msg.addType ?? '');
+      _reload();
       break;
 
-case 'addFile':
-      await _addGovFile(context, projectDir, msg.addType ?? '', sendToSession, openSession);
-      _refreshPanel(projectDir, sendToSession, openSession);
+    case 'detectLanguages':
+      _detectAndSetLanguages(_projectDir);
+      _reload();
       break;
 
-    case 'detectLanguages' as GovMsg['command']:
-      _detectAndSetLanguages(projectDir);
-      _refreshPanel(projectDir, sendToSession, openSession);
+    case 'checkVersion':
+      await _checkVersion(_ctx);
+      _reload();
       break;
 
-    case 'runUpgrade' as GovMsg['command']:
-      await _runUpgradeAndRefresh(projectDir, sendToSession, openSession);
+    case 'installUpdate': {
+      const term = vscode.window.createTerminal({ name: 'specsmith upgrade', shellPath: _shellPath() });
+      term.sendText('pipx upgrade specsmith || pip install --upgrade specsmith');
+      term.show();
+      void vscode.window.showInformationMessage('Upgrading specsmith… Reload after it completes.', 'Reload Now')
+        .then((a) => { if (a === 'Reload Now') { void vscode.commands.executeCommand('workbench.action.reloadWindow'); } });
+      break;
+    }
+
+    case 'getSysInfo':
+      void _sendSysInfo();
       break;
   }
 }
 
-async function _addGovFile(
-  context: vscode.ExtensionContext,
-  projectDir: string,
-  addType: string,
-  sendToSession: (t: string) => void,
-  openSession: () => Promise<void>,
-): Promise<void> {
-  const cfg  = vscode.workspace.getConfiguration('specsmith');
-  const exec = cfg.get<string>('executablePath', 'specsmith');
+// ── Version check ──────────────────────────────────────────────────────────────
+
+async function _checkVersion(context: vscode.ExtensionContext): Promise<void> {
+  await context.globalState.update('specsmith.lastVersionCheck', Date.now());
+  try {
+    const httpsM = await import('https');
+    const raw    = await new Promise<string>((resolve, reject) => {
+      const req = httpsM.get('https://pypi.org/pypi/specsmith/json', { timeout: 8000 }, (r) => {
+        let d = '';
+        r.on('data', (c: Buffer) => { d += c; });
+        r.on('end', () => resolve(d));
+      });
+      req.on('error', reject);
+      req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
+    });
+    const latest = (JSON.parse(raw) as { info?: { version?: string } }).info?.version ?? '';
+    await context.globalState.update('specsmith.availableVersion', latest);
+    _panel?.webview.postMessage({ type: 'versionInfo', available: latest });
+  } catch (err) {
+    _panel?.webview.postMessage({ type: 'versionInfo', error: String(err) });
+  }
+}
+
+// ── System info ────────────────────────────────────────────────────────────────
+
+async function _sendSysInfo(): Promise<void> {
+  if (!_panel) { return; }
+  const GB = 1073741824;
+  const info: Record<string, string> = {
+    os:    `${os.type()} ${os.release()} (${os.arch()})`,
+    cpu:   os.cpus()[0]?.model ?? 'Unknown',
+    cores: String(os.cpus().length),
+    ram:   `${(os.totalmem() / GB).toFixed(1)} GB total, ${(os.freemem() / GB).toFixed(1)} GB free`,
+  };
+
+  // GPU detection
+  try {
+    const r = cp.spawnSync('nvidia-smi', ['--query-gpu=name,memory.total', '--format=csv,noheader'], { timeout: 4000, encoding: 'utf8' });
+    if (r.status === 0 && r.stdout.trim()) { info.gpu = r.stdout.trim().split('\n')[0]; }
+  } catch { /* no nvidia */ }
+
+  if (!info.gpu && process.platform === 'win32') {
+    try {
+      const r = cp.spawnSync('powershell', ['-NoProfile', '-Command',
+        'Get-WmiObject Win32_VideoController | Select-Object -First 1 Name,AdapterRAM | ForEach-Object { "$($_.Name) ($([math]::Round($_.AdapterRAM/1GB,1))GB)" }',
+      ], { timeout: 6000, encoding: 'utf8' });
+      if (r.status === 0 && r.stdout.trim()) { info.gpu = r.stdout.trim(); }
+    } catch { /* no wmi */ }
+  }
+  if (!info.gpu) { info.gpu = 'Not detected'; }
+
+  // Disk
+  try {
+    if (process.platform === 'win32') {
+      const r = cp.spawnSync('wmic', ['logicaldisk', 'get', 'caption,freespace,size', '/format:csv'], { timeout: 4000, encoding: 'utf8' });
+      if (r.status === 0) {
+        info.disk = r.stdout.trim().split('\n').slice(1)
+          .filter(l => l.trim() && !l.startsWith('Node'))
+          .map(row => {
+            const [, caption, free, size] = row.split(',');
+            if (!caption || !size) { return ''; }
+            return `${caption.trim()} ${(Number(free) / GB).toFixed(1)}/${(Number(size) / GB).toFixed(1)} GB`;
+          }).filter(Boolean).join('  ') || 'N/A';
+      }
+    } else {
+      const r = cp.spawnSync('df', ['-h', '-P', '/'], { timeout: 3000, encoding: 'utf8' });
+      if (r.status === 0) { const p = r.stdout.split('\n')[1]?.split(/\s+/) ?? []; if (p[3]) { info.disk = `${p[0]}: ${p[3]} free / ${p[1]}`; } }
+    }
+  } catch { /* ignore */ }
+  if (!info.disk) { info.disk = 'N/A'; }
+
+  _panel.webview.postMessage({ type: 'sysInfo', info });
+}
+
+// ── scaffold helpers ───────────────────────────────────────────────────────────
+
+function _replaceYamlSection(lines: string[], key: string, val: string | string[]): string[] {
+  const out: string[] = [];
+  let i = 0; let replaced = false;
+  const altKey = key === 'languages' ? 'language' : null;
+  while (i < lines.length) {
+    const line = lines[i];
+    if (new RegExp(`^(${key}${altKey ? `|${altKey}` : ''}):`).test(line) && !replaced) {
+      replaced = true; i++;
+      while (i < lines.length && (lines[i].match(/^[ \t]*-/) || lines[i].match(/^[ \t]+\S/))) { i++; }
+      if (Array.isArray(val) && val.length) { out.push(`${key}:`); for (const v of val) { out.push(`  - ${v}`); } }
+      else if (typeof val === 'string' && val) { out.push(`${key}: ${val}`); }
+    } else { out.push(line); i++; }
+  }
+  if (!replaced) {
+    if (Array.isArray(val) && val.length) { out.push(`${key}:`); for (const v of val) { out.push(`  - ${v}`); } }
+    else if (typeof val === 'string' && val) { out.push(`${key}: ${val}`); }
+  }
+  return out;
+}
+
+function _saveScaffold(projectDir: string, scaffold: ScaffoldData): void {
+  const p = path.join(projectDir, 'scaffold.yml');
+  if (!fs.existsSync(p)) { void vscode.window.showWarningMessage('scaffold.yml not found — run specsmith init first'); return; }
+  let lines = fs.readFileSync(p, 'utf8').split('\n');
+  for (const [k, v] of Object.entries({ name: scaffold.name ?? '', type: scaffold.type ?? '', description: scaffold.description ?? '', vcs_platform: scaffold.vcs_platform ?? '' })) {
+    if (v) { lines = _replaceYamlSection(lines, k, v); }
+  }
+  for (const [k, v] of Object.entries({ languages: scaffold.languages ?? [], integrations: scaffold.integrations ?? [], platforms: scaffold.platforms ?? [], fpga_tools: scaffold.fpga_tools ?? [] })) {
+    if (v.length) { lines = _replaceYamlSection(lines, k, v); }
+  }
+  fs.writeFileSync(p, lines.join('\n'), 'utf8');
+  void vscode.window.showInformationMessage('scaffold.yml saved.');
+}
+
+// ── Language detection ─────────────────────────────────────────────────────────
+
+const EXT_LANG: Record<string, string> = {
+  '.py':'Python','.rs':'Rust','.go':'Go','.c':'C','.cpp':'C++','.cc':'C++','.h':'C','.hpp':'C++',
+  '.ts':'TypeScript','.tsx':'TypeScript','.js':'JavaScript','.cs':'C#','.swift':'Swift','.kt':'Kotlin',
+  '.vhd':'VHDL','.vhdl':'VHDL','.sv':'SystemVerilog','.v':'Verilog','.dart':'Dart','.java':'Java',
+  '.rb':'Ruby','.php':'PHP','.sh':'Bash','.ps1':'PowerShell','.cmd':'Cmd','.bb':'BitBake','.zig':'Zig',
+};
+const SKIP_DIRS = new Set(['node_modules','.git','.venv','__pycache__','dist','out','build','.specsmith']);
+
+function _detectAndSetLanguages(projectDir: string): void {
+  const found = new Set<string>();
+  (function scan(dir: string, depth: number) {
+    if (depth > 4) { return; }
+    let ents: string[]; try { ents = fs.readdirSync(dir); } catch { return; }
+    for (const e of ents) {
+      if (SKIP_DIRS.has(e)) { continue; }
+      const full = path.join(dir, e);
+      let st: ReturnType<typeof fs.statSync> | undefined; try { st = fs.statSync(full); } catch { continue; }
+      if (st.isDirectory()) { scan(full, depth + 1); }
+      else { const l = EXT_LANG[path.extname(e).toLowerCase()]; if (l) { found.add(l); } }
+    }
+  })(projectDir, 0);
+  if (!found.size) { void vscode.window.showInformationMessage('No recognisable language files found.'); return; }
+  const sp = path.join(projectDir, 'scaffold.yml');
+  if (!fs.existsSync(sp)) { void vscode.window.showWarningMessage('scaffold.yml not found.'); return; }
+  let lines = fs.readFileSync(sp, 'utf8').split('\n');
+  const langs = [...found].sort();
+  lines = _replaceYamlSection(lines, 'languages', langs);
+  fs.writeFileSync(sp, lines.join('\n'), 'utf8');
+  void vscode.window.showInformationMessage(`Detected & saved languages: ${langs.join(', ')}`);
+}
+
+async function _addGovFile(context: vscode.ExtensionContext, projectDir: string, addType: string): Promise<void> {
+  const exec = vscode.workspace.getConfiguration('specsmith').get<string>('executablePath', 'specsmith');
 
   switch (addType) {
     case 'ledger': {
       const fp = path.join(projectDir, 'LEDGER.md');
-      fs.writeFileSync(fp, `# LEDGER — ${path.basename(projectDir)}\n\n` +
-        `## Session — ${new Date().toISOString().slice(0, 10)}\n\n` +
-        `### Status: Initialised\n\n` +
-        `- Project governance initialised\n- LEDGER.md created\n\n` +
-        `### Open TODOs\n- [ ] Complete initial audit\n\n---\n`);
-      void vscode.window.showInformationMessage('LEDGER.md created with initial template.');
+      fs.writeFileSync(fp, `# LEDGER — ${path.basename(projectDir)}\n\n## Session — ${new Date().toISOString().slice(0, 10)}\n\n### Status: Initialised\n\n- LEDGER.md created\n\n### Open TODOs\n- [ ] Complete initial audit\n\n---\n`);
+      void vscode.window.showInformationMessage('LEDGER.md created.');
       break;
     }
     case 'test_spec': {
-      const ans = await vscode.window.showQuickPick(
-        [
-          { label: '🧠 AI-generated', description: 'Use specsmith to generate TEST_SPEC.md from REQUIREMENTS.md' },
-          { label: '📄 Manual template', description: 'Create an empty TEST_SPEC.md with structure' },
-        ],
-        { placeHolder: 'How should TEST_SPEC.md be created?' },
-      );
-      if (!ans) { return; }
-      const docsDir = path.join(projectDir, 'docs');
-      fs.mkdirSync(docsDir, { recursive: true });
+      const ans = await vscode.window.showQuickPick([{ label: '🧠 AI-generated' }, { label: '📄 Template' }], { placeHolder: 'How should TEST_SPEC.md be created?' });
+      if (!ans) { break; }
+      const docsDir = path.join(projectDir, 'docs'); fs.mkdirSync(docsDir, { recursive: true });
       if (ans.label.startsWith('🧠')) {
-        const { SessionPanel } = await import('./SessionPanel');
-        if (!SessionPanel.current()) { await openSession(); await new Promise(r => setTimeout(r, 2000)); }
-        sendToSession('Generate a TEST_SPEC.md based on REQUIREMENTS.md. Write it to docs/TEST_SPEC.md with proper TEST-* IDs that map to REQ-* IDs.');
+        if (_openFn && _sendFn) {
+          const { SessionPanel } = await import('./SessionPanel');
+          if (!SessionPanel.current()) { await _openFn(); await new Promise(r => setTimeout(r, 2000)); }
+          _sendFn('Generate a TEST_SPEC.md based on REQUIREMENTS.md. Write to docs/TEST_SPEC.md with TEST-* IDs mapping to REQ-* IDs.');
+        }
       } else {
-        fs.writeFileSync(path.join(docsDir, 'TEST_SPEC.md'),
-          `# Test Specification\n\n## Unit Tests\n\n- **TEST-001**: Description\n  Covers: REQ-001\n\n## Integration Tests\n\n- **TEST-INT-001**: Description\n  Covers: REQ-001\n`);
-        void vscode.window.showInformationMessage('TEST_SPEC.md created with template.');
+        fs.writeFileSync(path.join(docsDir, 'TEST_SPEC.md'), '# Test Specification\n\n## Unit Tests\n\n- **TEST-001**: Description\n  Covers: REQ-001\n');
+        void vscode.window.showInformationMessage('TEST_SPEC.md created.');
       }
       break;
     }
     case 'architecture': {
-      const ans = await vscode.window.showQuickPick(
-        [
-          { label: '🧠 AI-generated', description: 'Ask the agent to generate ARCHITECTURE.md' },
-          { label: '📄 Manual template', description: 'Create an empty ARCHITECTURE.md with structure' },
-          { label: '⚙ specsmith architect', description: 'Run specsmith architect --non-interactive' },
-        ],
-        { placeHolder: 'How should ARCHITECTURE.md be created?' },
-      );
-      if (!ans) { return; }
-      const docsDir = path.join(projectDir, 'docs');
-      fs.mkdirSync(docsDir, { recursive: true });
+      const ans = await vscode.window.showQuickPick([{ label: '🧠 AI-generated' }, { label: '📄 Template' }, { label: '⚙ specsmith architect' }], { placeHolder: 'How should ARCHITECTURE.md be created?' });
+      if (!ans) { break; }
+      const docsDir = path.join(projectDir, 'docs'); fs.mkdirSync(docsDir, { recursive: true });
       if (ans.label.startsWith('🧠')) {
-        const { SessionPanel } = await import('./SessionPanel');
-        if (!SessionPanel.current()) { await openSession(); await new Promise(r => setTimeout(r, 2000)); }
-        sendToSession('Generate an architecture document for this project. Write it to docs/ARCHITECTURE.md with sections: Overview, Components, Data Flow, Deployment, Verification Tools.');
+        if (_openFn && _sendFn) {
+          const { SessionPanel } = await import('./SessionPanel');
+          if (!SessionPanel.current()) { await _openFn(); await new Promise(r => setTimeout(r, 2000)); }
+          _sendFn('Generate an architecture document for this project. Write to docs/ARCHITECTURE.md.');
+        }
       } else if (ans.label.startsWith('⚙')) {
         const term = vscode.window.createTerminal({ name: 'specsmith architect', cwd: projectDir });
-        term.sendText(`${exec} architect --non-interactive --project-dir "${projectDir}"`);
-        term.show();
+        term.sendText(`${exec} architect --non-interactive --project-dir "${projectDir}"`); term.show();
       } else {
-        fs.writeFileSync(path.join(docsDir, 'ARCHITECTURE.md'),
-          `# Architecture\n\n## Overview\n\n## Components\n\n## Data Flow\n\n## Deployment\n\n## Verification Tools\n`);
-        void vscode.window.showInformationMessage('ARCHITECTURE.md created with template.');
+        fs.writeFileSync(path.join(docsDir, 'ARCHITECTURE.md'), '# Architecture\n\n## Overview\n\n## Components\n\n## Data Flow\n\n## Deployment\n\n');
+        void vscode.window.showInformationMessage('ARCHITECTURE.md created.');
       }
       break;
     }
     case 'requirements': {
-      const fp = path.join(projectDir, 'REQUIREMENTS.md');
-      const docsFp = path.join(projectDir, 'docs', 'REQUIREMENTS.md');
-      const target = fs.existsSync(path.dirname(docsFp)) ? docsFp : fp;
+      const target = fs.existsSync(path.join(projectDir, 'docs')) ? path.join(projectDir, 'docs', 'REQUIREMENTS.md') : path.join(projectDir, 'REQUIREMENTS.md');
       fs.mkdirSync(path.dirname(target), { recursive: true });
-      fs.writeFileSync(target, `# Requirements\n\n## Core\n\n- **REQ-001**: Description\n`);
+      fs.writeFileSync(target, '# Requirements\n\n## Core\n\n- **REQ-001**: Description\n');
       void vscode.window.showTextDocument(vscode.Uri.file(target));
       break;
     }
     case 'agents': {
       const term = vscode.window.createTerminal({ name: 'specsmith import', cwd: projectDir });
-      term.sendText(`${exec} import --project-dir "${projectDir}"`);
-      term.show();
+      term.sendText(`${exec} import --project-dir "${projectDir}"`); term.show();
       break;
     }
     case 'rename': {
-      // Rename docs/architecture.md → docs/ARCHITECTURE.md
-      const src  = path.join(projectDir, 'docs', 'architecture.md');
-      const dest = path.join(projectDir, 'docs', 'ARCHITECTURE.md');
-      if (fs.existsSync(src)) {
-        fs.renameSync(src, dest);
-        void vscode.window.showInformationMessage('Renamed docs/architecture.md → docs/ARCHITECTURE.md');
-      }
+      const src = path.join(projectDir, 'docs', 'architecture.md'), dest = path.join(projectDir, 'docs', 'ARCHITECTURE.md');
+      if (fs.existsSync(src)) { fs.renameSync(src, dest); void vscode.window.showInformationMessage('Renamed to ARCHITECTURE.md'); }
       break;
     }
   }
 }
 
-// ── Language detection ──────────────────────────────────────────────────────
-
-const EXT_LANG: Record<string, string> = {
-  '.py': 'Python', '.rs': 'Rust', '.go': 'Go', '.c': 'C', '.cpp': 'C++',
-  '.cc': 'C++', '.cxx': 'C++', '.h': 'C', '.hpp': 'C++', '.ts': 'TypeScript',
-  '.tsx': 'TypeScript', '.js': 'JavaScript', '.jsx': 'JavaScript', '.cs': 'C#',
-  '.swift': 'Swift', '.kt': 'Kotlin', '.vhd': 'VHDL', '.vhdl': 'VHDL',
-  '.sv': 'SystemVerilog', '.v': 'SystemVerilog', '.dart': 'Dart', '.java': 'Java',
-  '.rb': 'Ruby', '.php': 'PHP', '.sh': 'Bash', '.bash': 'Bash',
-  '.ps1': 'PowerShell', '.cmd': 'Cmd', '.bb': 'BitBake', '.bbappend': 'BitBake',
-  '.zig': 'Zig',
-};
-
-const SKIP_DIRS = new Set(['node_modules', '.git', '.venv', '__pycache__', 'dist', 'out', 'build', '.specsmith']);
-
-/** Scan projectDir for file extensions and patch languages in scaffold.yml. */
-function _detectAndSetLanguages(projectDir: string): void {
-  const detected = new Set<string>();
-  function scan(dir: string, depth: number): void {
-    if (depth > 4) { return; }
-    let entries: string[];
-    try { entries = fs.readdirSync(dir); } catch { return; }
-    for (const e of entries) {
-      if (SKIP_DIRS.has(e)) { continue; }
-      const full = path.join(dir, e);
-      let stat: ReturnType<typeof fs.statSync> | undefined;
-      try { stat = fs.statSync(full); } catch { continue; }
-      if (stat.isDirectory()) { scan(full, depth + 1); }
-      else {
-        const lang = EXT_LANG[path.extname(e).toLowerCase()];
-        if (lang) { detected.add(lang); }
-      }
-    }
-  }
-  scan(projectDir, 0);
-  if (!detected.size) {
-    void vscode.window.showInformationMessage('No recognisable language files found in project.');
-    return;
-  }
-  // Merge with existing scaffold.yml languages list
-  const scaffoldPath = path.join(projectDir, 'scaffold.yml');
-  if (!fs.existsSync(scaffoldPath)) {
-    void vscode.window.showWarningMessage('scaffold.yml not found — run specsmith init first.');
-    return;
-  }
-  let lines = fs.readFileSync(scaffoldPath, 'utf8').split('\n');
-  const langs = [...detected].sort();
-  lines = _replaceYamlSection(lines, 'languages', langs);
-  fs.writeFileSync(scaffoldPath, lines.join('\n'), 'utf8');
-  void vscode.window.showInformationMessage(`Detected & saved languages: ${langs.join(', ')}`);
-}
-
-/** Run specsmith upgrade in a terminal, then refresh the governance panel. */
-async function _runUpgradeAndRefresh(
-  projectDir: string,
-  sendToSession: (t: string) => void,
-  openSession: () => Promise<void>,
-): Promise<void> {
-  const cfg  = vscode.workspace.getConfiguration('specsmith');
-  const exec = cfg.get<string>('executablePath', 'specsmith');
-  const term = vscode.window.createTerminal({ name: 'specsmith upgrade', cwd: projectDir });
-  term.sendText(`${exec} upgrade --project-dir "${projectDir}"`);
-  term.show();
-  // Wait briefly, then reload — user can press Refresh again when terminal completes
-  await new Promise<void>((r) => setTimeout(r, 2500));
-  _refreshPanel(projectDir, sendToSession, openSession);
-}
-
-/** Safe line-based YAML section replacer — handles both indented and unindented list items. */
-function _replaceYamlSection(
-  lines: string[],
-  key: string,
-  newValue: string | string[],
-): string[] {
-  const result: string[] = [];
-  let i = 0;
-  let replaced = false;
-
-  // Also handle legacy singular form (language -> languages)
-  const altKey = key === 'languages' ? 'language' : null;
-
-  while (i < lines.length) {
-    const line = lines[i];
-    const keyRe = new RegExp(`^(${key}${altKey ? `|${altKey}` : ''}):`);
-    if (keyRe.test(line) && !replaced) {
-      replaced = true;
-      i++; // skip the key line
-      // Skip all list items that belong to this block (indented OR unindented '-')
-      while (i < lines.length) {
-        const next = lines[i];
-        if (next.match(/^[ \t]*-/) || next.match(/^[ \t]+\S/)) {
-          i++;
-        } else {
-          break;
-        }
-      }
-      // Write new value
-      if (Array.isArray(newValue) && newValue.length > 0) {
-        result.push(`${key}:`);
-        for (const v of newValue) { result.push(`  - ${v}`); }
-      } else if (typeof newValue === 'string' && newValue) {
-        result.push(`${key}: ${newValue}`);
-      }
-    } else {
-      result.push(line);
-      i++;
-    }
-  }
-
-  // Append if key was not found in the file
-  if (!replaced) {
-    if (Array.isArray(newValue) && newValue.length > 0) {
-      result.push(`${key}:`);
-      for (const v of newValue) { result.push(`  - ${v}`); }
-    } else if (typeof newValue === 'string' && newValue) {
-      result.push(`${key}: ${newValue}`);
-    }
-  }
-
-  return result;
-}
-
-function _saveScaffold(projectDir: string, scaffold: ScaffoldData): void {
-  const p = path.join(projectDir, 'scaffold.yml');
-  if (!fs.existsSync(p)) {
-    void vscode.window.showWarningMessage('scaffold.yml not found — run specsmith init first');
-    return;
-  }
-
-  // Use line-based replacement to avoid YAML corruption
-  let lines = fs.readFileSync(p, 'utf8').split('\n');
-
-  // Scalar fields
-  const scalars: Record<string, string> = {
-    name:         scaffold.name        ?? '',
-    type:         scaffold.type        ?? '',
-    description:  scaffold.description ?? '',
-    vcs_platform: scaffold.vcs_platform ?? '',
-  };
-  for (const [key, val] of Object.entries(scalars)) {
-    if (val) { lines = _replaceYamlSection(lines, key, val); }
-  }
-
-  // List fields
-  const lists: Record<string, string[]> = {
-    languages:    scaffold.languages    ?? [],
-    integrations: scaffold.integrations ?? [],
-    platforms:    scaffold.platforms    ?? [],
-  };
-  for (const [key, vals] of Object.entries(lists)) {
-    if (vals.length > 0) { lines = _replaceYamlSection(lines, key, vals); }
-  }
-
-  fs.writeFileSync(p, lines.join('\n'), 'utf8');
-  void vscode.window.showInformationMessage('scaffold.yml saved.');
+function _shellPath(): string | undefined {
+  return process.platform === 'win32' ? (process.env.ComSpec ?? 'powershell.exe') : process.env.SHELL;
 }
 
 // ── HTML ──────────────────────────────────────────────────────────────────────
 
-function _isOutOfDate(scaffoldVer: string | undefined, installedVer: string | null): boolean {
-  if (!scaffoldVer || !installedVer) { return false; }
-  return scaffoldVer !== installedVer && scaffoldVer < installedVer;
-}
-
 function _html(data: ProjectData): string {
-  const s = data.scaffold;
-  const selectedLangs = s.languages ?? [];
-  const selectedInts  = s.integrations ?? [];
-  const selectedPlats = s.platforms ?? [];
-  const outOfDate     = _isOutOfDate(s.spec_version, data.installedVersion);
+  const s     = data.scaffold;
+  const ood   = s.spec_version && data.installedVersion && s.spec_version < data.installedVersion;
+  const upd   = data.availableVersion && data.installedVersion && data.availableVersion !== data.installedVersion;
 
-  const typeOpts = PROJECT_TYPES.map(t =>
-    `<option value="${t}"${s.type === t ? ' selected' : ''}>${t}</option>`,
+  const selL = s.languages ?? [], selI = s.integrations ?? [], selP = s.platforms ?? [], selF = s.fpga_tools ?? [];
+
+  const typeOpts  = PROJECT_TYPES.map(t => `<option${s.type === t ? ' selected' : ''}>${t}</option>`).join('');
+  const vcsOpts   = VCS_PLATFORMS.map(v => `<option${s.vcs_platform === v ? ' selected' : ''}>${v}</option>`).join('');
+
+  const chips = (arr: string[], sel: string[], name: string) =>
+    arr.map(x =>
+      `<label class="chip${sel.includes(x) ? ' sel' : ''}">` +
+      `<input type="checkbox" name="${name}" value="${x}"${sel.includes(x) ? ' checked' : ''}> ${x}</label>`
+    ).join('');
+
+  const fileRows = data.govFiles.map(f => f.exists
+    ? `<tr><td class="ok">✓</td><td>${f.label}</td><td class="dim">${f.lines} lines</td>` +
+      `<td><button class="tb" onclick="openFile('${f.rel}')">Open</button></td></tr>`
+    : `<tr><td class="miss">✗</td><td class="dim">${f.label}</td><td class="dim">—</td>` +
+      `<td><button class="add-btn" onclick="addFile('${f.addCmd ?? f.rel}')">${f.addCmd === 'rename' ? 'Rename' : 'Add'}</button></td></tr>`
   ).join('');
 
-  const fileRows = data.govFiles.map(f => {
-    if (f.exists) {
-      return `<tr>
-        <td class="ok">✓</td>
-        <td>${f.label}</td>
-        <td class="dim">${f.lines ?? ''} lines</td>
-        <td><button class="tb" onclick="openFile('${f.rel}')">Open</button></td>
-      </tr>`;
-    }
-    const btnLabel = f.addCmd === 'rename' ? 'Rename' : 'Add';
-    return `<tr>
-      <td class="miss">✗</td>
-      <td class="dim">${f.label}</td>
-      <td class="dim">—</td>
-      <td><button class="add-btn" onclick="addFile('${f.addCmd ?? f.rel}')">${btnLabel}</button></td>
-    </tr>`;
-  }).join('');
-
-  const langChips = LANGUAGES.map(l =>
-    `<label class="chip${selectedLangs.includes(l) ? ' sel' : ''}">
-      <input type="checkbox" name="language" value="${l}"${selectedLangs.includes(l) ? ' checked' : ''}> ${l}
-    </label>`,
+  const prompts = PROMPTS.map(p =>
+    `<button class="pb" onclick="sendToAgent(${JSON.stringify(p.prompt)})">${p.label}</button>`
   ).join('');
-
-  const vcsOpts = VCS_PLATFORMS.map(v =>
-    `<option value="${v}"${s.vcs_platform === v ? ' selected' : ''}>${v}</option>`,
-  ).join('');
-
-  const intChips = INTEGRATIONS.map(i =>
-    `<label class="chip${selectedInts.includes(i) ? ' sel' : ''}">
-      <input type="checkbox" name="integration" value="${i}"${selectedInts.includes(i) ? ' checked' : ''}> ${i}
-    </label>`,
-  ).join('');
-
-  const platChips = PLATFORMS.map(p =>
-    `<label class="chip${selectedPlats.includes(p) ? ' sel' : ''}">
-      <input type="checkbox" name="platform" value="${p}"${selectedPlats.includes(p) ? ' checked' : ''}> ${p}
-    </label>`,
-  ).join('');
-
-  const prompts = PROMPT_PALETTE.map(p =>
-    `<button class="pb" onclick="sendToAgent(${JSON.stringify(p.prompt)})">${p.label}</button>`,
-  ).join('');
-
-  const outOfDateBanner = outOfDate ? `
-    <div class="warn-banner">
-      ⚠ scaffold.yml spec_version <strong>${s.spec_version}</strong> is older than installed specsmith
-      <strong>${data.installedVersion}</strong>
-      <button class="tb" onclick="runCmd('upgrade')">↑ Run upgrade</button>
-    </div>` : '';
 
   return /* html */`<!DOCTYPE html>
-<html lang="en">
-<head>
+<html lang="en"><head>
 <meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';">
 <style>
@@ -601,111 +515,153 @@ function _html(data: ProjectData): string {
     --teal:#4ec9b0;--red:#f44747;--grn:#4ec94e;--amb:#ce9178;--dim:#7f849c;
     --fn:var(--vscode-font-family,'Segoe UI',system-ui,sans-serif);}
   *{box-sizing:border-box;margin:0;padding:0}
-  body{background:var(--bg);color:var(--fg);font-family:var(--fn);font-size:13px;padding:14px;overflow-y:auto}
-  h2{color:var(--teal);font-size:13px;margin:18px 0 7px;border-bottom:1px solid var(--br);padding-bottom:3px;display:flex;align-items:center;gap:8px}
-  h2:first-of-type{margin-top:0}
-  label.fld{font-size:11px;color:var(--dim);display:block;margin-bottom:2px}
-  input[type=text],select{width:100%;background:var(--ib);color:var(--if);
-    border:1px solid var(--br);border-radius:4px;padding:4px 7px;font-size:12px;font-family:var(--fn)}
+  body{background:var(--bg);color:var(--fg);font-family:var(--fn);font-size:13px;
+       display:flex;flex-direction:column;height:100vh;overflow:hidden}
+  .topbar{display:flex;align-items:center;justify-content:space-between;
+          padding:7px 12px;background:var(--sf);border-bottom:1px solid var(--br);flex-shrink:0}
+  .title{font-size:13px;color:var(--teal);font-weight:700}
+  .tab-bar{display:flex;background:var(--sf);border-bottom:2px solid var(--br);flex-shrink:0;overflow-x:auto}
+  .tab{background:none;border:none;border-bottom:2px solid transparent;margin-bottom:-2px;
+       padding:6px 11px;cursor:pointer;color:var(--dim);font-size:11px;white-space:nowrap;font-family:var(--fn)}
+  .tab:hover:not(.active){color:var(--fg)}
+  .tab.active{border-bottom-color:var(--teal);color:var(--teal);font-weight:600}
+  .scroll{flex:1;overflow-y:auto;padding:12px 14px}
+  .tab-pane{display:none}.tab-pane.active{display:block}
+  h3{color:var(--teal);font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;
+     margin:14px 0 5px;border-bottom:1px solid var(--br);padding-bottom:3px}
+  h3:first-child{margin-top:0}
+  label.fl{font-size:11px;color:var(--dim);display:block;margin-bottom:2px}
+  input[type=text],select{width:100%;background:var(--ib);color:var(--if);border:1px solid var(--br);
+    border-radius:4px;padding:4px 7px;font-size:12px;font-family:var(--fn)}
   input[type=text]:focus,select:focus{outline:1px solid var(--teal)}
   input[type=checkbox]{margin-right:3px}
   .row{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:7px}
-  .fld-grp{margin-bottom:7px}
+  .fg{margin-bottom:7px}
   .btn{background:var(--bb);color:var(--bf);border:none;border-radius:4px;
-    padding:5px 12px;cursor:pointer;font-size:12px;font-weight:600}
+       padding:5px 12px;cursor:pointer;font-size:12px;font-weight:600}
   .btn:hover{opacity:.85}
   .btn-sm{background:none;border:1px solid var(--br);color:var(--dim);border-radius:3px;
-    padding:3px 9px;cursor:pointer;font-size:11px}
+          padding:3px 9px;cursor:pointer;font-size:11px}
   .btn-sm:hover{border-color:var(--teal);color:var(--teal)}
+  .btn-upd{background:#4ec94e;color:#000;font-weight:700}
   .tb{background:none;border:1px solid var(--br);border-radius:3px;color:var(--dim);
-    padding:2px 7px;cursor:pointer;font-size:10px}
+      padding:2px 7px;cursor:pointer;font-size:10px}
   .tb:hover{border-color:var(--teal);color:var(--teal)}
   .add-btn{background:rgba(78,201,176,.12);border:1px solid var(--teal);border-radius:3px;
-    color:var(--teal);padding:2px 7px;cursor:pointer;font-size:10px;font-weight:600}
+           color:var(--teal);padding:2px 7px;cursor:pointer;font-size:10px;font-weight:600}
   .add-btn:hover{background:rgba(78,201,176,.25)}
   table{width:100%;border-collapse:collapse;font-size:12px}
   td{padding:3px 7px;border-bottom:1px solid var(--br)}
-  .ok{color:var(--grn);font-weight:700;width:18px}
-  .miss{color:var(--red);width:18px}
+  .ok{color:var(--grn);font-weight:700;width:18px}.miss{color:var(--red);width:18px}
   .dim{color:var(--dim);font-size:11px}
-  .chip-group{display:flex;flex-wrap:wrap;gap:5px;margin-top:3px}
+  .chips{display:flex;flex-wrap:wrap;gap:4px;margin-top:3px}
   .chip{display:inline-flex;align-items:center;background:var(--sf);border:1px solid var(--br);
-    border-radius:12px;padding:2px 9px;font-size:11px;cursor:pointer;transition:border-color .1s,background .1s}
-  .chip:hover{border-color:var(--teal)}
-  .chip.sel{background:rgba(78,201,176,.15);border-color:var(--teal);color:var(--teal)}
+        border-radius:12px;padding:2px 9px;font-size:11px;cursor:pointer}
+  .chip:hover{border-color:var(--teal)}.chip.sel{background:rgba(78,201,176,.15);border-color:var(--teal);color:var(--teal)}
   .chip input{display:none}
-  .qa{display:grid;grid-template-columns:1fr 1fr;gap:5px}
+  .qa{display:grid;grid-template-columns:1fr 1fr;gap:4px;margin-bottom:12px}
   .qa-btn{background:none;border:1px solid var(--br);border-radius:4px;color:var(--dim);
-    padding:4px 7px;cursor:pointer;font-size:11px;text-align:left}
+          padding:4px 7px;cursor:pointer;font-size:11px;text-align:left}
   .qa-btn:hover{border-color:var(--teal);color:var(--teal)}
-  .pb{background:var(--sf);border:1px solid var(--br);border-radius:5px;
-    color:var(--fg);padding:6px 10px;cursor:pointer;font-size:12px;
-    text-align:left;display:block;width:100%;margin-bottom:4px}
+  .pb{background:var(--sf);border:1px solid var(--br);border-radius:4px;color:var(--fg);
+      padding:5px 9px;cursor:pointer;font-size:12px;text-align:left;display:block;width:100%;margin-bottom:3px}
   .pb:hover{border-color:var(--teal);background:rgba(78,201,176,.06)}
-  .notice{background:rgba(78,201,176,.08);border:1px solid rgba(78,201,176,.25);
-    border-radius:4px;padding:7px 10px;font-size:11px;color:var(--teal);margin-bottom:10px}
-  .warn-banner{background:rgba(206,145,120,.1);border:1px solid var(--amb);
-    border-radius:4px;padding:7px 10px;font-size:11px;color:var(--amb);
-    margin-bottom:10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-  .hdr{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
-  .hdr-btns{display:flex;gap:6px}
-  .filter-input{font-size:11px;padding:3px 6px;margin-bottom:5px}
-  .search-wrap{position:relative;margin-bottom:5px}
-</style>
-</head>
+  .warn-banner{background:rgba(206,145,120,.1);border:1px solid var(--amb);border-radius:4px;
+               padding:6px 10px;font-size:11px;color:var(--amb);margin-bottom:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .info-box{background:rgba(78,201,176,.06);border:1px solid rgba(78,201,176,.25);
+            border-radius:4px;padding:7px 10px;font-size:11px;color:var(--teal);margin-bottom:8px}
+  .ver-grid{display:grid;grid-template-columns:100px 1fr;gap:4px 8px;font-size:12px;margin-bottom:10px}
+  .ver-lbl{color:var(--dim)}.ver-val{font-weight:600}
+  .sys-grid{display:grid;grid-template-columns:80px 1fr;gap:3px 8px;font-size:11px;margin-top:6px}
+  .sys-lbl{color:var(--dim)}.sys-val{font-family:var(--vscode-editor-font-family,'Cascadia Code',monospace)}
+  .badge{display:inline-block;background:rgba(78,201,176,.2);color:var(--teal);
+         border-radius:10px;padding:1px 7px;font-size:9px;font-weight:700;margin-left:4px}
+  .filter-in{font-size:11px;padding:3px 6px;margin-bottom:4px;width:100%}
+  .btn-row{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
+</style></head>
 <body>
-
-<div class="hdr">
-  <strong style="font-size:14px;color:var(--teal)">🧠 Governance</strong>
-  <div class="hdr-btns">
-    <button class="btn-sm" onclick="refresh()">↺ Refresh</button>
-    <button class="btn-sm" onclick="sendToAgent('Open a new session and run the session start protocol: sync, load AGENTS.md, read LEDGER.md, check for updates.')">🤖 Agent</button>
+<div class="topbar">
+  <span class="title">🧠 Governance</span>
+  <div style="display:flex;gap:5px">
+    <button class="btn-sm" onclick="refresh()">↺</button>
+    <button class="btn-sm" onclick="sendToAgent('Run the session start protocol: sync, load AGENTS.md, check LEDGER.md.')">🤖 Agent</button>
   </div>
 </div>
+${ood ? `<div class="warn-banner">⚠ scaffold.yml spec_version <b>${s.spec_version}</b> older than installed <b>${data.installedVersion}</b><button class="tb" onclick="runCmd('upgrade')">↑ upgrade</button></div>` : ''}
+<div class="tab-bar">
+  <button class="tab active" onclick="sw('project')">📁 Project</button>
+  <button class="tab" onclick="sw('tools')">🔧 Tools</button>
+  <button class="tab" onclick="sw('files')">📋 Files</button>
+  <button class="tab" onclick="sw('updates')">🆙 Updates${upd ? '<span class="badge">NEW</span>' : ''}</button>
+  <button class="tab" onclick="sw('actions')">⚡ Actions</button>
+</div>
+<div class="scroll">
 
-<div class="notice">AI prompts route through the active agent session. If none is open, one will be started automatically.</div>
-${outOfDateBanner}
-
-<h2>📁 scaffold.yml
-  <span class="dim" style="font-size:10px;font-weight:400">${data.scaffold.spec_version ? `v${data.scaffold.spec_version}` : ''}</span>
-</h2>
+<!-- Project tab -->
+<div id="t-project" class="tab-pane active">
 <div class="row">
-  <div class="fld-grp"><label class="fld">Project Name</label>
-    <input type="text" id="name" value="${s.name ?? ''}"></div>
-  <div class="fld-grp"><label class="fld">Project Type</label>
-    <select id="type">${typeOpts}</select></div>
+  <div class="fg"><label class="fl">Project Name</label><input type="text" id="name" value="${s.name ?? ''}"></div>
+  <div class="fg"><label class="fl">Project Type</label><select id="type">${typeOpts}</select></div>
 </div>
-<div class="fld-grp"><label class="fld">Description</label>
-  <input type="text" id="description" value="${s.description ?? ''}"></div>
-<div class="fld-grp">
-  <label class="fld">Language(s)</label>
-  <input class="filter-input" type="text" placeholder="Filter languages…" oninput="filterChips(this,'language')">
-  <div class="chip-group" id="lang-chips">${langChips}</div>
+<div class="fg"><label class="fl">Description</label><input type="text" id="desc" value="${s.description ?? ''}"></div>
+<div class="fg"><label class="fl">Language(s)</label>
+  <input class="filter-in" type="text" placeholder="Filter…" oninput="filt(this,'language')">
+  <div class="chips">${chips(LANGUAGES, selL, 'language')}</div>
 </div>
 <div class="row">
-  <div class="fld-grp"><label class="fld">VCS Platform</label>
-    <select id="vcs_platform">${vcsOpts}</select></div>
-  <div class="fld-grp"><label class="fld">Spec Version (read-only)</label>
-    <input type="text" id="spec_version" value="${s.spec_version ?? ''}" disabled style="opacity:.5"></div>
+  <div class="fg"><label class="fl">VCS Platform</label><select id="vcs">${vcsOpts}</select></div>
+  <div class="fg"><label class="fl">Spec Version</label><input type="text" id="specver" value="${s.spec_version ?? ''}" disabled style="opacity:.5"></div>
 </div>
-<div class="fld-grp"><label class="fld">Agent Integrations</label>
-  <div class="chip-group">${intChips}</div></div>
-<div class="fld-grp"><label class="fld">Platforms</label>
-  <div class="chip-group">${platChips}</div></div>
-
-<div style="display:flex;gap:7px;margin:10px 0">
-  <button class="btn" onclick="saveScaffold()">💾 Save</button>
-  <button class="btn-sm" onclick="runCmd('upgrade')">↑ upgrade</button>
-  <button class="btn-sm" onclick="sendToAgent('Review scaffold.yml and suggest improvements to the project configuration. Focus on type, integrations, and any missing fields.')">🧠 Ask Agent</button>
+<div class="btn-row">
+  <button class="btn" onclick="save()">💾 Save</button>
+  <button class="btn-sm" onclick="detectLang()">🔍 Detect Languages</button>
+  <button class="btn-sm" onclick="runCmd('upgrade')">↑ Upgrade spec</button>
+</div>
 </div>
 
-<h2>📋 Governance Files</h2>
+<!-- Tools tab -->
+<div id="t-tools" class="tab-pane">
+<div class="info-box">Record which FPGA/HDL tools and agent integrations your project uses.
+  specsmith uses this to generate CI/CD adapters and AGENTS.md guidance.</div>
+<h3>FPGA / HDL Tools</h3>
+<div class="chips">${chips(FPGA_TOOLS, selF, 'fpga_tool')}</div>
+<h3>Agent Integrations</h3>
+<div class="chips">${chips(INTEGRATIONS, selI, 'integration')}</div>
+<h3>Target Platforms</h3>
+<div class="chips">${chips(PLATFORMS, selP, 'platform')}</div>
+<div class="btn-row"><button class="btn" onclick="save()">💾 Save</button></div>
+</div>
+
+<!-- Files tab -->
+<div id="t-files" class="tab-pane">
+<div class="info-box">AI prompts auto-open an agent session if none is active.</div>
 <table>
-  <thead><tr><td></td><td><b>File</b></td><td class="dim">Size</td><td></td></tr></thead>
+  <thead><tr><td></td><td><b>File</b></td><td class="dim">Lines</td><td></td></tr></thead>
   <tbody>${fileRows}</tbody>
 </table>
+</div>
 
-<h2>⚡ Quick Actions</h2>
+<!-- Updates tab -->
+<div id="t-updates" class="tab-pane">
+<h3>specsmith Version</h3>
+<div class="ver-grid">
+  <span class="ver-lbl">Installed</span><span class="ver-val">${data.installedVersion ?? '—'}</span>
+  <span class="ver-lbl">Available</span><span class="ver-val" id="ver-avail">${data.availableVersion ?? '(not checked)'}</span>
+  <span class="ver-lbl">Last check</span><span class="ver-lbl" id="last-check">${data.lastUpdateCheck ?? 'never'}</span>
+</div>
+<div class="btn-row">
+  <button class="btn" id="chk-btn" onclick="chkVer()">🔍 Check for Updates</button>
+  ${upd ? '<button class="btn btn-upd" onclick="installUpd()">⬆ Install Update</button>' : ''}
+</div>
+<h3 style="margin-top:16px">System Info</h3>
+<div id="sys-load" class="dim">Loading…</div>
+<div id="sys-grid" class="sys-grid" style="display:none"></div>
+<div style="margin-top:8px"><button class="btn-sm" onclick="getSys()">↺ Refresh</button></div>
+</div>
+
+<!-- Actions tab -->
+<div id="t-actions" class="tab-pane">
+<h3>Quick Actions</h3>
 <div class="qa">
   <button class="qa-btn" onclick="runCmd('audit --fix')">🔍 audit --fix</button>
   <button class="qa-btn" onclick="runCmd('validate')">✅ validate</button>
@@ -716,42 +672,74 @@ ${outOfDateBanner}
   <button class="qa-btn" onclick="runCmd('req list')">📋 req list</button>
   <button class="qa-btn" onclick="runCmd('req gaps')">⚠ req gaps</button>
 </div>
-
-<h2>🤖 AI Prompt Palette</h2>
+<h3>AI Prompt Palette</h3>
 ${prompts}
+</div>
+</div><!-- scroll -->
 
 <script>
-const vscode = acquireVsCodeApi();
+const vscode=acquireVsCodeApi();
+const LANGUAGES=${JSON.stringify(LANGUAGES)};
+const FPGA_TOOLS=${JSON.stringify(FPGA_TOOLS)};
+
+function sw(id){
+  const tabs=['project','tools','files','updates','actions'];
+  document.querySelectorAll('.tab').forEach((t,i)=>t.classList.toggle('active',tabs[i]===id));
+  document.querySelectorAll('.tab-pane').forEach(p=>p.classList.toggle('active',p.id==='t-'+id));
+  if(id==='updates')getSys();
+}
 function refresh(){vscode.postMessage({command:'refresh'})}
 function runCmd(cmd){vscode.postMessage({command:'runCommand',cmd})}
-function sendToAgent(prompt){vscode.postMessage({command:'sendToAgent',prompt})}
-function openFile(file){vscode.postMessage({command:'openFile',file})}
-function addFile(addType){vscode.postMessage({command:'addFile',addType})}
-function saveScaffold(){
-  const languages=[...document.querySelectorAll('input[name=language]:checked')].map(e=>e.value);
-  const integrations=[...document.querySelectorAll('input[name=integration]:checked')].map(e=>e.value);
-  const platforms=[...document.querySelectorAll('input[name=platform]:checked')].map(e=>e.value);
+function sendToAgent(p){vscode.postMessage({command:'sendToAgent',prompt:p})}
+function openFile(f){vscode.postMessage({command:'openFile',file:f})}
+function addFile(t){vscode.postMessage({command:'addFile',addType:t})}
+function detectLang(){vscode.postMessage({command:'detectLanguages'})}
+function chkVer(){document.getElementById('chk-btn').textContent='⌛…';vscode.postMessage({command:'checkVersion'})}
+function installUpd(){vscode.postMessage({command:'installUpdate'})}
+function getSys(){
+  document.getElementById('sys-load').style.display='';
+  document.getElementById('sys-grid').style.display='none';
+  vscode.postMessage({command:'getSysInfo'});
+}
+function save(){
   vscode.postMessage({command:'saveScaffold',scaffold:{
     name:document.getElementById('name').value,
     type:document.getElementById('type').value,
-    description:document.getElementById('description').value,
-    vcs_platform:document.getElementById('vcs_platform').value,
-    languages,integrations,platforms
+    description:document.getElementById('desc').value,
+    vcs_platform:document.getElementById('vcs').value,
+    languages:[...document.querySelectorAll('input[name=language]:checked')].map(e=>e.value),
+    integrations:[...document.querySelectorAll('input[name=integration]:checked')].map(e=>e.value),
+    platforms:[...document.querySelectorAll('input[name=platform]:checked')].map(e=>e.value),
+    fpga_tools:[...document.querySelectorAll('input[name=fpga_tool]:checked')].map(e=>e.value),
   }});
 }
-// Filter chips by typing
-function filterChips(input,name){
-  const q=input.value.toLowerCase();
-  document.querySelectorAll(\`input[name=\${name}]\`).forEach(cb=>{
-    const chip=cb.closest('.chip');
-    if(chip)chip.style.display=(!q||cb.value.toLowerCase().includes(q))?'':'none';
+function filt(inp,name){
+  const q=inp.value.toLowerCase();
+  document.querySelectorAll('input[name='+name+']').forEach(cb=>{
+    const c=cb.closest('.chip');if(c)c.style.display=(!q||cb.value.toLowerCase().includes(q))?'':'none';
   });
 }
-// Toggle chip selected style on click
 document.querySelectorAll('.chip').forEach(c=>{
   c.addEventListener('click',()=>c.classList.toggle('sel',c.querySelector('input').checked));
 });
+window.addEventListener('message',({data})=>{
+  if(data.type==='versionInfo'){
+    document.getElementById('chk-btn').textContent='🔍 Check for Updates';
+    if(data.error){document.getElementById('ver-avail').textContent='Error — try again';}
+    else if(data.available){
+      document.getElementById('ver-avail').textContent=data.available;
+      document.getElementById('last-check').textContent=new Date().toLocaleString([],{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+    }
+  }
+  if(data.type==='sysInfo'){
+    const g=document.getElementById('sys-grid');
+    const labels={os:'OS',cpu:'CPU',cores:'Cores',ram:'RAM',gpu:'GPU',disk:'Disk'};
+    g.innerHTML=Object.entries(labels).filter(([k])=>data.info[k])
+      .map(([k,l])=>\`<span class="sys-lbl">\${l}</span><span class="sys-val">\${data.info[k]}</span>\`).join('');
+    document.getElementById('sys-load').style.display='none';
+    g.style.display='grid';
+  }
+});
 </script>
-</body>
-</html>`;
+</body></html>`;
 }

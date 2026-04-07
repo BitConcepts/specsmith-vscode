@@ -216,9 +216,17 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
   );
 
-  // Startup: fetch models + check for specsmith update
+  // Startup: fetch models, update check, and auto-open governance panel
   void _startupFetchModels(context);
   void _checkForSpecsmithUpdate(context);
+  void _autoOpenGovernancePanel(context, openSession);
+
+  // Keep governance panel in sync when workspace folders change
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeWorkspaceFolders(() => {
+      // If the panel is open and the project dir changed, it will be refreshed on next focus
+    }),
+  );
 
   // ── Commands: specsmith tools ────────────────────────────────────────────
 
@@ -670,6 +678,38 @@ async function _checkForSpecsmithUpdate(context: vscode.ExtensionContext): Promi
       void vscode.commands.executeCommand('specsmith.installOrUpgrade');
     }
   } catch { /* silent — don't crash startup */ }
+}
+
+/**
+ * Auto-open the Governance panel when VS Code starts with a workspace.
+ * Opens Beside the editor after a short delay so it doesn't block activation.
+ * Respects a user setting to disable: specsmith.autoOpenGovernancePanel = false.
+ */
+async function _autoOpenGovernancePanel(
+  context: vscode.ExtensionContext,
+  openSession: (dir: string) => Promise<void>,
+): Promise<void> {
+  const cfg = vscode.workspace.getConfiguration('specsmith');
+  if (cfg.get<boolean>('autoOpenGovernancePanel', true) === false) { return; }
+
+  // Wait for VS Code to finish painting before we do anything
+  await new Promise((r) => setTimeout(r, 1500));
+
+  const workspaceDir =
+    SessionPanel.current()?.projectDir
+    ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+
+  if (!workspaceDir) { return; }
+
+  // Focus the specsmith sidebar first so the user sees it
+  void vscode.commands.executeCommand('workbench.view.extension.specsmith');
+
+  showGovernancePanel(
+    context,
+    workspaceDir,
+    (text) => SessionPanel.current()?.sendCommand(text),
+    async () => { await openSession(workspaceDir); },
+  );
 }
 
 /** Silently warm the model cache at extension startup for all configured providers. */
