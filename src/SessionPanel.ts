@@ -641,9 +641,33 @@ function addA(t,customTs){const d=document.createElement('div');d.className='ma'
   <button class="ab" title="Copy" onclick="cp(this)">⎘</button>
   <button class="ab" title="Regenerate" onclick="regen()">&#x21BA;</button></div>\`;
   C.appendChild(d);sb2()}
+function extractErrSummary(r){
+  if(!r)return'(empty result)';
+  // Python traceback: find last exception line
+  if(/Traceback \(most recent call last\)/i.test(r)){
+    const lines=r.split('\\n').map(l=>l.trim()).filter(Boolean).reverse();
+    for(const l of lines){
+      if(/^(\\w*Error|Exception|RuntimeError|ValueError|TypeError|ImportError|ModuleNotFoundError|ValidationError|SystemExit)/.test(l))
+        return 'Python error: '+l.slice(0,150);
+    }
+    return 'Python exception (see details)';
+  }
+  // Non-zero exit: use first meaningful line as summary
+  const lines=r.split('\\n').map(l=>l.trim()).filter(l=>l&&!l.startsWith('#'));
+  return lines[0]?.slice(0,150)||r.slice(0,150);
+}
 function addT(n,r,e){const d=document.createElement('div');d.className='tb'+(e?' er':'');
-  d.innerHTML=\`<div class="thdr">\${e?'❌':'✅'} \${esc(n)}</div>
-  <div class="tres">\${esc((r||'').slice(0,500))}\${(r||'').length>500?'<em>…</em>':''}</div>\`;
+  if(e&&r&&r.length>200){
+    // Collapsible error with smart summary
+    const summary=extractErrSummary(r);
+    d.innerHTML=\`<div class="thdr">❌ \${esc(n)}</div>
+      <details><summary class="tres" style="cursor:pointer;list-style:none">
+        \${esc(summary)}<span class="dim" style="font-size:9px;margin-left:4px">(click for details)</span>
+      </summary><pre class="err-detail" style="margin-top:4px;font-size:10px">\${esc(r.slice(0,3000))}\${r.length>3000?'\\n…(truncated)':''}</pre></details>\`;
+  }else{
+    d.innerHTML=\`<div class="thdr">\${e?'❌':'✅'} \${esc(n)}</div>
+      <div class="tres">\${esc((r||'').slice(0,500))}\${(r||'').length>500?'<em>…</em>':''}</div>\`;
+  }
   C.appendChild(d);sb2()}
 function addS(m){
   const d=document.createElement('div');d.className='sl';
@@ -670,6 +694,15 @@ const ERR_MAP=[
   [/GOOGLE_API_KEY/,                       'Google API key missing — Ctrl+Shift+P → specsmith: Set API Key'],
   [/MISTRAL_API_KEY/,                      'Mistral API key missing — Ctrl+Shift+P → specsmith: Set API Key'],
   [/Usage:.*specsmith.*COMMAND/s,          'specsmith CLI error — see details'],
+  // Python tracebacks and crashes
+  [/Traceback \(most recent call last\)/i,  'specsmith crashed — Python exception (click for details)'],
+  [/ValidationError.*type|input should be.*ProjectType/i, 'scaffold.yml has an unsupported project type — open scaffold.yml and check the type field'],
+  [/ModuleNotFoundError.*specsmith/i,       'specsmith is missing a module — try: specsmith: Install or Upgrade'],
+  [/ImportError/i,                          'specsmith import error — try reinstalling via: pipx upgrade specsmith'],
+  // Ollama 400
+  [/HTTP Error 400|Bad Request/i,           'Ollama 400 — model does not support tool calling. Try a cloud provider (Anthropic/OpenAI) or a newer Ollama model.'],
+  // Generic non-zero exit
+  [/\[exit [1-9]/,                          'Command failed — see error detail above'],
 ];
 function smartErr(m){
   for(const[re,msg]of ERR_MAP){if(re.test(m))return{short:msg,long:m}}
