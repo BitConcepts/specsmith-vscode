@@ -105,6 +105,7 @@ interface ProjectData {
   projectDir: string; scaffold: ScaffoldData; govFiles: GovFile[];
   installedVersion: string | null; availableVersion: string | null; lastUpdateCheck: string | null;
   phase: AEEPhaseInfo;
+  releaseChannel: string;  // 'stable' | 'pre-release'
 }
 interface GovMsg {
   command:
@@ -114,11 +115,12 @@ interface GovMsg {
     | 'getOllamaModels' | 'ollamaRemoveModel' | 'ollamaUpdateModel' | 'ollamaUpdateAll'
     | 'checkOllamaVersion' | 'ollamaUpgrade' | 'scanProject'
     | 'saveExecution' | 'scanTools' | 'toolInstall'
-    | 'reloadWindow' | 'detectTools' | 'detectDisciplines';
+    | 'reloadWindow' | 'detectTools' | 'detectDisciplines' | 'setReleaseChannel';
   scaffold?: ScaffoldData; cmd?: string; prompt?: string; file?: string; addType?: string;
   phaseKey?: string; modelId?: string;
   profileName?: string; customAllowed?: string; customBlocked?: string; customBlockedTools?: string;
   toolKey?: string;
+  channel?: string;  // for setReleaseChannel
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -327,7 +329,10 @@ function _loadProjectData(projectDir: string, context: vscode.ExtensionContext):
   // Read AEE phase from scaffold.yml
   const phase = _readPhase(projectDir);
 
-  return { projectDir, scaffold, govFiles, installedVersion, availableVersion: avail || null, lastUpdateCheck: lastCheck, phase };
+  // Release channel from VS Code settings
+  const releaseChannel = vscode.workspace.getConfiguration('specsmith').get<string>('releaseChannel', 'stable');
+
+  return { projectDir, scaffold, govFiles, installedVersion, availableVersion: avail || null, lastUpdateCheck: lastCheck, phase, releaseChannel };
 }
 
 // ── Message handler ────────────────────────────────────────────────────────────
@@ -476,6 +481,13 @@ async function _handleMsg(msg: GovMsg): Promise<void> {
     case 'detectTools':
       void _runDetectTools();
       break;
+
+    case 'setReleaseChannel': {
+      if (!msg.channel) { break; }
+      const cfg = vscode.workspace.getConfiguration('specsmith');
+      void cfg.update('releaseChannel', msg.channel, vscode.ConfigurationTarget.Global);
+      break;
+    }
 
     case 'detectDisciplines': {
       const suggestions = _suggestDisciplines(
@@ -1018,6 +1030,7 @@ function _readPhase(projectDir: string): AEEPhaseInfo {
 
 function _html(data: ProjectData): string {
   const s     = data.scaffold;
+  const activeChannel = data.releaseChannel ?? 'stable';
   const ood   = s.spec_version && data.installedVersion && s.spec_version < data.installedVersion;
   // Only show 'update available' when PyPI version is STRICTLY NEWER than installed
   const upd = data.availableVersion && data.installedVersion
@@ -1126,6 +1139,8 @@ function _html(data: ProjectData): string {
   .pb:hover{border-color:var(--teal);background:rgba(78,201,176,.06)}
   .warn-banner{background:rgba(206,145,120,.1);border:1px solid var(--amb);border-radius:4px;
                padding:6px 10px;font-size:11px;color:var(--amb);margin-bottom:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .upd-banner{background:rgba(78,201,176,.08);border:1px solid rgba(78,201,176,.4);border-radius:4px;
+              padding:6px 10px;font-size:11px;color:var(--teal);margin-bottom:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
   .info-box{background:rgba(78,201,176,.06);border:1px solid rgba(78,201,176,.25);
             border-radius:4px;padding:7px 10px;font-size:11px;color:var(--teal);margin-bottom:8px}
   .ver-grid{display:grid;grid-template-columns:100px 1fr;gap:4px 8px;font-size:12px;margin-bottom:10px}
@@ -1171,7 +1186,8 @@ ${(() => {
   <select class="phase-sel" onchange="phaseSet(this.value)">${phaseOpts}</select>
 </div>`;
   })()}
-${ood ? `<div class="warn-banner">⚠ scaffold.yml spec_version <b>${s.spec_version}</b> older than installed <b>${data.installedVersion}</b><button class="tb" onclick="runCmd('upgrade')">↑ upgrade</button></div>` : ''}
+${ood ? `<div class="warn-banner">⚠ scaffold.yml spec_version <b>${s.spec_version}</b> older than installed <b>${data.installedVersion}</b> — <button class="tb" onclick="runCmd('upgrade')">↑ upgrade spec</button></div>` : ''}
+${upd ? `<div class="upd-banner">⬆ specsmith <b>${data.availableVersion}</b> available (installed <b>${data.installedVersion}</b>) — <button class="tb" style="border-color:var(--teal);color:var(--teal)" onclick="sw('updates')">View Update</button></div>` : ''}
 <div class="tab-bar">
   <button class="tab active" onclick="sw('project')">📁 Project</button>
   <button class="tab" onclick="sw('tools')">🔧 Tools</button>
@@ -1250,6 +1266,11 @@ ${ood ? `<div class="warn-banner">⚠ scaffold.yml spec_version <b>${s.spec_vers
   <span class="ver-lbl">Installed</span><span class="ver-val">${data.installedVersion ?? '—'}</span>
   <span class="ver-lbl">Available</span><span class="ver-val" id="ver-avail">${data.availableVersion ?? '(not checked)'}</span>
   <span class="ver-lbl">Last check</span><span class="ver-lbl" id="last-check">${data.lastUpdateCheck ?? 'never'}</span>
+  <span class="ver-lbl">Channel</span>
+  <select id="release-ch" onchange="saveReleaseChannel(this.value)" style="width:auto;background:var(--ib);color:var(--if);border:1px solid var(--br);border-radius:3px;padding:2px 5px;font-size:11px;font-family:var(--fn)">
+    <option value="stable"${activeChannel === 'stable' ? ' selected' : ''}>stable (recommended)</option>
+    <option value="pre-release"${activeChannel === 'pre-release' ? ' selected' : ''}>pre-release (dev builds)</option>
+  </select>
 </div>
 <div class="btn-row">
   <button class="btn" id="chk-btn" onclick="chkVer()">🔍 Check for Updates</button>
@@ -1380,6 +1401,7 @@ function installTool(key){vscode.postMessage({command:'toolInstall',toolKey:key}
 function detectToolsNow(){
   vscode.postMessage({command:'detectTools'});
 }
+function saveReleaseChannel(ch){vscode.postMessage({command:'setReleaseChannel',channel:ch});}
 function suggestDisciplines(){
   const type=document.getElementById('type')?.value||'';
   const langs=[...document.querySelectorAll('input[name=language]:checked')].map(e=>e.value);
