@@ -76,6 +76,10 @@ interface ScaffoldData {
   name?: string; type?: string; description?: string; vcs_platform?: string; spec_version?: string;
   languages?: string[]; integrations?: string[]; platforms?: string[];
   fpga_tools?: string[]; auxiliary_disciplines?: string[];
+  execution_profile?: string;
+  custom_allowed_commands?: string[];
+  custom_blocked_commands?: string[];
+  custom_blocked_tools?: string[];
 }
 interface GovFile { rel: string; label: string; exists: boolean; lines?: number; addCmd?: string; }
 interface AEEPhaseInfo {
@@ -98,9 +102,12 @@ interface GovMsg {
     | 'addFile' | 'checkVersion' | 'installUpdate' | 'getSysInfo' | 'detectLanguages'
     | 'phaseNext' | 'phaseSet'
     | 'getOllamaModels' | 'ollamaRemoveModel' | 'ollamaUpdateModel' | 'ollamaUpdateAll'
-    | 'checkOllamaVersion' | 'ollamaUpgrade' | 'scanProject';
+    | 'checkOllamaVersion' | 'ollamaUpgrade' | 'scanProject'
+    | 'saveExecution' | 'scanTools' | 'toolInstall';
   scaffold?: ScaffoldData; cmd?: string; prompt?: string; file?: string; addType?: string;
   phaseKey?: string; modelId?: string;
+  profileName?: string; customAllowed?: string; customBlocked?: string; customBlockedTools?: string;
+  toolKey?: string;
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -268,7 +275,7 @@ function _loadProjectData(projectDir: string, context: vscode.ExtensionContext):
           (scaffold as Record<string, string>)[m[1]] = m[2].replace(/^["']|["']$/g, '').trim();
         }
       }
-      for (const field of ['integrations','platforms','languages','fpga_tools','auxiliary_disciplines']) {
+      for (const field of ['integrations','platforms','languages','fpga_tools','auxiliary_disciplines','custom_allowed_commands','custom_blocked_commands','custom_blocked_tools']) {
         const re  = new RegExp(`^${field}:\\s*\\n((?:[ \\t]*- .+\\n?)+)`, 'm');
         const m2  = raw.match(re);
         if (m2) { (scaffold as Record<string, string[]>)[field] = m2[1].match(/- (.+)/g)?.map(l => l.slice(2).trim()) ?? []; }
@@ -434,6 +441,25 @@ async function _handleMsg(msg: GovMsg): Promise<void> {
     case 'scanProject':
       void _runScanProject();
       break;
+
+    case 'saveExecution': {
+      if (!msg.profileName) { break; }
+      _saveExecutionSettings(_projectDir, msg.profileName, msg.customAllowed ?? '', msg.customBlocked ?? '', msg.customBlockedTools ?? '');
+      break;
+    }
+
+    case 'scanTools':
+      void _runToolsScan();
+      break;
+
+    case 'toolInstall': {
+      if (!msg.toolKey) { break; }
+      const exec5 = vscode.workspace.getConfiguration('specsmith').get<string>('executablePath', 'specsmith');
+      const term5 = vscode.window.createTerminal({ name: `install ${msg.toolKey}`, cwd: _projectDir });
+      term5.sendText(`${exec5} tools install "${msg.toolKey}"`);
+      term5.show();
+      break;
+    }
 
     case 'phaseNext': {
       const exec = vscode.workspace.getConfiguration('specsmith').get<string>('executablePath', 'specsmith');
@@ -659,6 +685,46 @@ function _replaceYamlSection(lines: string[], key: string, val: string | string[
     else if (typeof val === 'string' && val) { out.push(`${key}: ${val}`); }
   }
   return out;
+}
+
+function _saveExecutionSettings(
+  projectDir: string,
+  profileName: string,
+  customAllowed: string,
+  customBlocked: string,
+  customBlockedTools: string,
+): void {
+  const p = path.join(projectDir, 'scaffold.yml');
+  if (!fs.existsSync(p)) { void vscode.window.showWarningMessage('scaffold.yml not found'); return; }
+  let lines = fs.readFileSync(p, 'utf8').split('\n');
+  if (profileName) { lines = _replaceYamlSection(lines, 'execution_profile', profileName); }
+  const toList = (s: string) => s.split(/[,\n]/).map(x => x.trim()).filter(Boolean);
+  const allowed = toList(customAllowed);
+  const blocked = toList(customBlocked);
+  const blockedTools = toList(customBlockedTools);
+  if (allowed.length) { lines = _replaceYamlSection(lines, 'custom_allowed_commands', allowed); }
+  if (blocked.length) { lines = _replaceYamlSection(lines, 'custom_blocked_commands', blocked); }
+  if (blockedTools.length) { lines = _replaceYamlSection(lines, 'custom_blocked_tools', blockedTools); }
+  fs.writeFileSync(p, lines.join('\n'), 'utf8');
+  void vscode.window.showInformationMessage('Execution settings saved to scaffold.yml.');
+}
+
+async function _runToolsScan(): Promise<void> {
+  if (!_panel || !_projectDir) { return; }
+  const exec = vscode.workspace.getConfiguration('specsmith').get<string>('executablePath', 'specsmith');
+  const r = cp.spawnSync(
+    exec,
+    ['tools', 'scan', '--project-dir', _projectDir, '--json', '--fpga'],
+    { encoding: 'utf8', timeout: 15000 },
+  );
+  let tools: Array<{ name: string; category: string; installed: boolean; version: string }> = [];
+  if (r.status === 0 && r.stdout.trim()) {
+    try {
+      const parsed = JSON.parse(r.stdout.trim()) as { tools?: typeof tools };
+      tools = parsed.tools ?? [];
+    } catch { /* ignore */ }
+  }
+  _panel.webview.postMessage({ type: 'toolsScanResult', tools });
 }
 
 function _saveScaffold(projectDir: string, scaffold: ScaffoldData): void {
@@ -1020,6 +1086,7 @@ ${ood ? `<div class="warn-banner">⚠ scaffold.yml spec_version <b>${s.spec_vers
   <button class="tab" onclick="sw('files')">📋 Files</button>
   <button class="tab" onclick="sw('updates')">🆙 Updates${upd ? '<span class="badge">NEW</span>' : ''}</button>
   <button class="tab" onclick="sw('actions')">⚡ Actions</button>
+  <button class="tab" onclick="sw('execution')">🛡 Execution</button>
 </div>
 <div class="scroll">
 
@@ -1107,6 +1174,57 @@ ${ood ? `<div class="warn-banner">⚠ scaffold.yml spec_version <b>${s.spec_vers
 <div style="margin-top:8px"><button class="btn-sm" onclick="getSys()">↺ Refresh</button></div>
 </div>
 
+<!-- Execution tab -->
+${(() => {
+  const execProfile = s.execution_profile ?? 'standard';
+  const EXEC_PROFILES = [
+    { value: 'safe',     label: '🔒 Safe',     desc: 'Read-only. No shell, no file writes. Inspection only.' },
+    { value: 'standard',label: '⚙ Standard', desc: 'Default. specsmith, git, build tools. Blocks sudo/rm-rf.' },
+    { value: 'open',     label: '🔓 Open',     desc: 'Almost all commands. Only blocks catastrophic disk ops.' },
+    { value: 'admin',    label: '⚠ Admin',    desc: 'No restrictions. Use only in trusted/sandbox environments.' },
+  ];
+  const profileOpts = EXEC_PROFILES.map(p =>
+    `<option value="${p.value}"${execProfile === p.value ? ' selected' : ''}>${p.label}</option>`
+  ).join('');
+  const profileDescs = JSON.stringify(Object.fromEntries(EXEC_PROFILES.map(p => [p.value, p.desc])));
+  const joinOrEmpty = (arr?: string[]) => (arr ?? []).join('\n');
+  return `<div id="t-execution" class="tab-pane">
+<div class="info-box">Controls what the AI agent is allowed to do during agentic sessions.
+Profile is stored in <b>scaffold.yml</b> as <code>execution_profile</code>.</div>
+<h3>Execution Profile</h3>
+<div class="fg">
+  <label class="fl">Profile</label>
+  <select id="exec-profile" onchange="execProfileChanged()">${profileOpts}</select>
+</div>
+<div id="exec-profile-desc" class="info-box" style="font-size:11px;margin-top:4px">${EXEC_PROFILES.find(p=>p.value===execProfile)?.desc??''}</div>
+<h3>Custom Overrides</h3>
+<div class="fg"><label class="fl">Additional allowed command prefixes (one per line or comma-separated)</label>
+  <textarea id="exec-allowed" rows="3" style="width:100%;background:var(--ib);color:var(--if);border:1px solid var(--br);border-radius:4px;padding:4px 7px;font-size:11px;font-family:var(--fn);resize:vertical">${joinOrEmpty(s.custom_allowed_commands)}</textarea>
+</div>
+<div class="fg"><label class="fl">Additional blocked command prefixes (one per line or comma-separated)</label>
+  <textarea id="exec-blocked" rows="3" style="width:100%;background:var(--ib);color:var(--if);border:1px solid var(--br);border-radius:4px;padding:4px 7px;font-size:11px;font-family:var(--fn);resize:vertical">${joinOrEmpty(s.custom_blocked_commands)}</textarea>
+</div>
+<div class="fg"><label class="fl">Blocked agent tools (comma-separated, e.g. run_command,write_file)</label>
+  <textarea id="exec-blocked-tools" rows="2" style="width:100%;background:var(--ib);color:var(--if);border:1px solid var(--br);border-radius:4px;padding:4px 7px;font-size:11px;font-family:var(--fn);resize:vertical">${joinOrEmpty(s.custom_blocked_tools)}</textarea>
+</div>
+<div class="btn-row">
+  <button class="btn" onclick="saveExec()">💾 Save</button>
+</div>
+<h3 style="margin-top:16px">Tool Installer</h3>
+<div class="info-box" style="font-size:11px">Scan your project tools and install missing ones. Install commands use your platform's preferred package manager.</div>
+<div id="tools-scan-load" class="dim">Click Scan to check installed tools</div>
+<table id="tools-scan-table" style="display:none;font-size:11px">
+  <thead><tr><td></td><td><b>Tool</b></td><td class="dim">Category</td><td class="dim">Version</td><td></td></tr></thead>
+  <tbody id="tools-scan-body"></tbody>
+</table>
+<div class="btn-row" style="margin-top:8px">
+  <button class="btn-sm" onclick="scanToolsNow()">🔍 Scan Tools</button>
+  <button class="btn-sm" onclick="runCmd('tools install --list')">📋 All Installable Tools</button>
+</div>
+<div id="exec-profile-descs" style="display:none">${JSON.stringify(Object.fromEntries(EXEC_PROFILES.map(p=>[p.value,p.desc])))}</div>
+</div>`;
+})()}
+
 <!-- Actions tab -->
 <div id="t-actions" class="tab-pane">
 <h3>Quick Actions</h3>
@@ -1133,11 +1251,36 @@ const LANGUAGES=${JSON.stringify(LANGUAGES)};
 const FPGA_TOOLS=${JSON.stringify(FPGA_TOOLS)};
 
 function sw(id){
-  const tabs=['project','tools','files','updates','actions'];
+  const tabs=['project','tools','files','updates','actions','execution'];
   document.querySelectorAll('.tab').forEach((t,i)=>t.classList.toggle('active',tabs[i]===id));
   document.querySelectorAll('.tab-pane').forEach(p=>p.classList.toggle('active',p.id==='t-'+id));
   if(id==='updates')getSys();
+  if(id==='execution')scanToolsNow();
 }
+function execProfileChanged(){
+  const sel=document.getElementById('exec-profile');
+  const descEl=document.getElementById('exec-profile-desc');
+  const rawDescs=document.getElementById('exec-profile-descs');
+  if(!sel||!descEl||!rawDescs)return;
+  try{const descs=JSON.parse(rawDescs.textContent||'{}');descEl.textContent=descs[sel.value]||'';}catch(e){}
+}
+function saveExec(){
+  vscode.postMessage({command:'saveExecution',
+    profileName:document.getElementById('exec-profile').value,
+    customAllowed:document.getElementById('exec-allowed').value,
+    customBlocked:document.getElementById('exec-blocked').value,
+    customBlockedTools:document.getElementById('exec-blocked-tools').value,
+  });
+}
+function scanToolsNow(){
+  const load=document.getElementById('tools-scan-load');
+  const tbl=document.getElementById('tools-scan-table');
+  if(load)load.textContent='Scanning…';
+  if(load)load.style.display='';
+  if(tbl)tbl.style.display='none';
+  vscode.postMessage({command:'scanTools'});
+}
+function installTool(key){vscode.postMessage({command:'toolInstall',toolKey:key});}
 function refresh(){vscode.postMessage({command:'refresh'})}
 function runCmd(cmd){vscode.postMessage({command:'runCommand',cmd})}
 function sendToAgent(p){vscode.postMessage({command:'sendToAgent',prompt:p})}
@@ -1257,6 +1400,23 @@ window.addEventListener('message',({data})=>{
         ? data.latest+' ← update available'
         : data.latest+' ✓ up to date')
       : '(could not check)';
+  }
+  if(data.type==='toolsScanResult'){
+    const load=document.getElementById('tools-scan-load');
+    const tbody=document.getElementById('tools-scan-body');
+    const tbl=document.getElementById('tools-scan-table');
+    if(!tbody||!tbl||!load)return;
+    const tools=data.tools||[];
+    if(!tools.length){load.textContent='No tools found — does scaffold.yml exist?';load.style.display='';return;}
+    tbody.innerHTML=tools.map(t=>{
+      const ok=t.installed;
+      const icon=ok?'<span class="ok">\u2713</span>':'<span class="miss">\u2717</span>';
+      const ver=t.version?\`<span class="dim">\${t.version}</span>\`:'<span class="dim">—</span>';
+      const btn=ok?'':\`<button class="tb" onclick="installTool('\${t.name}')">Install</button>\`;
+      return \`<tr><td>\${icon}</td><td>\${t.name}</td><td class="dim">\${t.category}</td><td>\${ver}</td><td>\${btn}</td></tr>\`;
+    }).join('');
+    load.style.display='none';
+    tbl.style.display='';
   }
   if(data.type==='scanResult'){
     const r=data.result;
