@@ -103,7 +103,8 @@ interface GovMsg {
     | 'phaseNext' | 'phaseSet'
     | 'getOllamaModels' | 'ollamaRemoveModel' | 'ollamaUpdateModel' | 'ollamaUpdateAll'
     | 'checkOllamaVersion' | 'ollamaUpgrade' | 'scanProject'
-    | 'saveExecution' | 'scanTools' | 'toolInstall';
+    | 'saveExecution' | 'scanTools' | 'toolInstall'
+    | 'reloadWindow';
   scaffold?: ScaffoldData; cmd?: string; prompt?: string; file?: string; addType?: string;
   phaseKey?: string; modelId?: string;
   profileName?: string; customAllowed?: string; customBlocked?: string; customBlockedTools?: string;
@@ -367,18 +368,22 @@ async function _handleMsg(msg: GovMsg): Promise<void> {
       break;
 
     case 'checkVersion':
+      // Don't reload — webview JS updates via versionInfo message type without losing active tab
       await _checkVersion(_ctx);
-      _reload();
       break;
 
     case 'installUpdate': {
       const term = vscode.window.createTerminal({ name: 'specsmith upgrade', shellPath: _shellPath() });
       term.sendText('pipx upgrade specsmith || pip install --upgrade specsmith');
       term.show();
-      void vscode.window.showInformationMessage('Upgrading specsmith… Reload after it completes.', 'Reload Now')
-        .then((a) => { if (a === 'Reload Now') { void vscode.commands.executeCommand('workbench.action.reloadWindow'); } });
+      // Tell webview to swap Install→Reload button so user can reload when done
+      _panel?.webview.postMessage({ type: 'installStarted' });
       break;
     }
+
+    case 'reloadWindow':
+      void vscode.commands.executeCommand('workbench.action.reloadWindow');
+      break;
 
     case 'getSysInfo':
       void _sendSysInfo();
@@ -1006,13 +1011,16 @@ function _html(data: ProjectData): string {
   .btn{background:var(--bb);color:var(--bf);border:none;border-radius:4px;
        padding:5px 12px;cursor:pointer;font-size:12px;font-weight:600}
   .btn:hover{opacity:.85}
-  .btn-sm{background:none;border:1px solid var(--br);color:var(--dim);border-radius:3px;
-          padding:3px 9px;cursor:pointer;font-size:11px}
-  .btn-sm:hover{border-color:var(--teal);color:var(--teal)}
-  .btn-upd{background:#4ec94e;color:#000;font-weight:700}
-  .tb{background:none;border:1px solid var(--br);border-radius:3px;color:var(--dim);
-      padding:2px 7px;cursor:pointer;font-size:10px}
-  .tb:hover{border-color:var(--teal);color:var(--teal)}
+  .btn-sm{background:rgba(255,255,255,.04);border:1px solid var(--br);color:var(--fg);
+          border-radius:3px;padding:3px 10px;cursor:pointer;font-size:11px;opacity:.9}
+  .btn-sm:hover{border-color:var(--teal);color:var(--teal);opacity:1;background:rgba(78,201,176,.06)}
+  .btn-upd{background:#4ec94e;color:#000;font-weight:700;opacity:1}
+  .btn-rel{background:rgba(78,201,176,.18);border:1px solid var(--teal);color:var(--teal);
+           border-radius:3px;padding:3px 10px;cursor:pointer;font-size:11px;font-weight:600}
+  .btn-rel:hover{background:rgba(78,201,176,.32)}
+  .tb{background:rgba(255,255,255,.03);border:1px solid var(--br);border-radius:3px;
+      color:var(--fg);padding:2px 8px;cursor:pointer;font-size:10px;opacity:.85}
+  .tb:hover{border-color:var(--teal);color:var(--teal);opacity:1;background:rgba(78,201,176,.06)}
   .add-btn{background:rgba(78,201,176,.12);border:1px solid var(--teal);border-radius:3px;
            color:var(--teal);padding:2px 7px;cursor:pointer;font-size:10px;font-weight:600}
   .add-btn:hover{background:rgba(78,201,176,.25)}
@@ -1026,9 +1034,9 @@ function _html(data: ProjectData): string {
   .chip:hover{border-color:var(--teal)}.chip.sel{background:rgba(78,201,176,.15);border-color:var(--teal);color:var(--teal)}
   .chip input{display:none}
   .qa{display:grid;grid-template-columns:1fr 1fr;gap:4px;margin-bottom:12px}
-  .qa-btn{background:none;border:1px solid var(--br);border-radius:4px;color:var(--dim);
-          padding:4px 7px;cursor:pointer;font-size:11px;text-align:left}
-  .qa-btn:hover{border-color:var(--teal);color:var(--teal)}
+  .qa-btn{background:rgba(255,255,255,.03);border:1px solid var(--br);border-radius:4px;
+          color:var(--fg);padding:4px 7px;cursor:pointer;font-size:11px;text-align:left;opacity:.9}
+  .qa-btn:hover{border-color:var(--teal);color:var(--teal);opacity:1;background:rgba(78,201,176,.06)}
   .pb{background:var(--sf);border:1px solid var(--br);border-radius:4px;color:var(--fg);
       padding:5px 9px;cursor:pointer;font-size:12px;text-align:left;display:block;width:100%;margin-bottom:3px}
   .pb:hover{border-color:var(--teal);background:rgba(78,201,176,.06)}
@@ -1060,8 +1068,8 @@ function _html(data: ProjectData): string {
 <div class="topbar">
     <span class="title">⚙ Settings</span>
   <div style="display:flex;gap:5px">
-    <button class="btn-sm" onclick="refresh()">↺</button>
-    <button class="btn-sm" onclick="sendToAgent('Run the session start protocol: sync, load AGENTS.md, check LEDGER.md.')">🤖 Agent</button>
+    <button class="btn-sm" title="Reload panel" onclick="refresh()">↺ Refresh</button>
+    <button class="btn-sm" title="Start agent session" onclick="sendToAgent('Run the session start protocol: sync, load AGENTS.md, check LEDGER.md.')">🤖 Agent</button>
   </div>
 </div>
 ${(() => {
@@ -1292,7 +1300,11 @@ function chkVer(){
   btn.textContent='⌛ Checking…';btn.disabled=true;
   vscode.postMessage({command:'checkVersion'});
 }
-function installUpd(){vscode.postMessage({command:'installUpdate'})}
+function installUpd(){
+  const btn=document.querySelector('.btn-upd');
+  if(btn){btn.textContent='Installing…';btn.disabled=true;}
+  vscode.postMessage({command:'installUpdate'});
+}
 function getSys(){
   document.getElementById('sys-load').style.display='';
   document.getElementById('sys-grid').style.display='none';
@@ -1391,6 +1403,18 @@ window.addEventListener('message',({data})=>{
     load.style.display='none';
     tbl.style.display=data.models&&data.models.length?'':'none';
     if(!data.models||!data.models.length){load.textContent='No models installed';load.style.display='';}
+  }
+  if(data.type==='installStarted'){
+    // Upgrade terminal opened — swap Install button to Reload
+    const row=document.getElementById('chk-btn')?.closest('.btn-row');
+    if(row){
+      const old=row.querySelector('.btn-upd,button[disabled]');
+      if(old)old.remove();
+      const rel=document.createElement('button');
+      rel.className='btn btn-rel';rel.textContent='↺ Reload Window';
+      rel.onclick=()=>vscode.postMessage({command:'reloadWindow'});
+      row.appendChild(rel);
+    }
   }
   if(data.type==='ollamaVersionInfo'){
     document.getElementById('ollama-chk-btn').textContent='🔍 Check Ollama';

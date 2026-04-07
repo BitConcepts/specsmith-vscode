@@ -73,6 +73,13 @@ export function activate(context: vscode.ExtensionContext): void {
     await SessionPanel.create(context, projectDir, provider, d.model);
     sessionTree.refresh();
     projectTree.addProject(projectDir);
+    // Always open the Settings panel alongside the session so there's never a blank pane
+    showGovernancePanel(
+      context,
+      projectDir,
+      (text) => SessionPanel.current()?.sendCommand(text),
+      async () => { await openSession(projectDir); },
+    );
   }
 
   // ── Commands: Sessions ───────────────────────────────────────────────────
