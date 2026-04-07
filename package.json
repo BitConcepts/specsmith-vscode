@@ -2,7 +2,7 @@
   "name": "specsmith-vscode",
   "displayName": "specsmith — AEE Workbench",
   "description": "Applied Epistemic Engineering workbench. AI agent sessions with live model listing, requirements management, token monitoring, and governance tools.",
-  "version": "0.3.0",
+"version": "0.3.1",
   "publisher": "BitConcepts",
   "license": "MIT",
   "engines": { "vscode": "^1.85.0" },

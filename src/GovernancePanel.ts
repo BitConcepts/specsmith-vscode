@@ -67,15 +67,27 @@ interface ScaffoldData {
   languages?: string[]; integrations?: string[]; platforms?: string[]; fpga_tools?: string[];
 }
 interface GovFile { rel: string; label: string; exists: boolean; lines?: number; addCmd?: string; }
+interface AEEPhaseInfo {
+  key:   string;
+  emoji: string;
+  label: string;
+  desc:  string;
+  pct:   number;   // 0–100 readiness
+  ready: boolean;
+  next:  string | null;
+}
 interface ProjectData {
   projectDir: string; scaffold: ScaffoldData; govFiles: GovFile[];
   installedVersion: string | null; availableVersion: string | null; lastUpdateCheck: string | null;
+  phase: AEEPhaseInfo;
 }
 interface GovMsg {
   command:
     | 'saveScaffold' | 'runCommand' | 'sendToAgent' | 'openFile' | 'refresh'
-    | 'addFile' | 'checkVersion' | 'installUpdate' | 'getSysInfo' | 'detectLanguages';
+    | 'addFile' | 'checkVersion' | 'installUpdate' | 'getSysInfo' | 'detectLanguages'
+    | 'phaseNext' | 'phaseSet';
   scaffold?: ScaffoldData; cmd?: string; prompt?: string; file?: string; addType?: string;
+  phaseKey?: string;
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -191,7 +203,10 @@ function _loadProjectData(projectDir: string, context: vscode.ExtensionContext):
   const checkMs   = context.globalState.get<number>('specsmith.lastVersionCheck', 0);
   const lastCheck = checkMs ? new Date(checkMs).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : null;
 
-  return { projectDir, scaffold, govFiles, installedVersion, availableVersion: avail || null, lastUpdateCheck: lastCheck };
+  // Read AEE phase from scaffold.yml
+  const phase = _readPhase(projectDir);
+
+  return { projectDir, scaffold, govFiles, installedVersion, availableVersion: avail || null, lastUpdateCheck: lastCheck, phase };
 }
 
 // ── Message handler ────────────────────────────────────────────────────────────
@@ -259,6 +274,30 @@ async function _handleMsg(msg: GovMsg): Promise<void> {
     case 'getSysInfo':
       void _sendSysInfo();
       break;
+
+    case 'phaseNext': {
+      const exec = vscode.workspace.getConfiguration('specsmith').get<string>('executablePath', 'specsmith');
+      const term = vscode.window.createTerminal({ name: 'specsmith phase', cwd: _projectDir });
+      term.sendText(`${exec} phase next --project-dir "${_projectDir}"`);
+      term.show();
+      // Reload after short delay
+      await new Promise<void>((r) => setTimeout(r, 1500));
+      _reload();
+      break;
+    }
+
+    case 'phaseSet': {
+      if (!msg.phaseKey) { break; }
+      const exec2 = vscode.workspace.getConfiguration('specsmith').get<string>('executablePath', 'specsmith');
+      const r2    = cp.spawnSync(exec2, ['phase', 'set', msg.phaseKey, '--force', '--project-dir', _projectDir], { encoding: 'utf8', timeout: 5000 });
+      if (r2.status === 0) {
+        void vscode.window.showInformationMessage(`AEE phase set to: ${msg.phaseKey}`);
+      } else {
+        void vscode.window.showWarningMessage(`phase set failed: ${(r2.stderr ?? '').slice(0, 200)}`);
+      }
+      _reload();
+      break;
+    }
   }
 }
 
@@ -474,6 +513,48 @@ function _shellPath(): string | undefined {
   return process.platform === 'win32' ? (process.env.ComSpec ?? 'powershell.exe') : process.env.SHELL;
 }
 
+// ── Phase reading ────────────────────────────────────────────────────────
+
+const PHASE_CATALOG: Record<string, { emoji: string; label: string; desc: string; next: string | null }> = {
+  inception:      { emoji: '\uD83C\uDF31', label: 'Inception',        desc: 'Governance scaffold, project type, AGENTS.md',           next: 'architecture'   },
+  architecture:   { emoji: '\uD83C\uDFD7', label: 'Architecture',     desc: 'ARCHITECTURE.md, components, key decisions sealed',       next: 'requirements'   },
+  requirements:   { emoji: '\uD83D\uDCCB', label: 'Requirements',     desc: 'REQUIREMENTS.md, stress-tested, equilibrium reached',     next: 'test_spec'      },
+  test_spec:      { emoji: '\u2705',        label: 'Test Spec',        desc: 'TEST_SPEC.md covering all P1 requirements (≥80 %)',       next: 'implementation' },
+  implementation: { emoji: '\u2699',        label: 'Implementation',   desc: 'Code → commit → audit → ledger cycle',                    next: 'verification'   },
+  verification:   { emoji: '\uD83D\uDD2C', label: 'Verification',     desc: 'Epistemic audit passes, trace vault sealed',              next: 'release'        },
+  release:        { emoji: '\uD83D\uDE80', label: 'Release',           desc: 'CHANGELOG updated, tag created, compliance report filed', next: null             },
+};
+const PHASE_ORDER = ['inception','architecture','requirements','test_spec','implementation','verification','release'];
+
+function _readPhase(projectDir: string): AEEPhaseInfo {
+  // 1. Read key from scaffold.yml
+  let key = 'inception';
+  const sp = path.join(projectDir, 'scaffold.yml');
+  if (fs.existsSync(sp)) {
+    try {
+      const m = fs.readFileSync(sp, 'utf8').match(/^aee_phase:\s*(\S+)/m);
+      if (m && PHASE_CATALOG[m[1]]) { key = m[1]; }
+    } catch { /* ignore */ }
+  }
+
+  // 2. Quick readiness estimate (count governance files present)
+  const checks: Array<() => boolean> = [
+    () => fs.existsSync(path.join(projectDir, 'scaffold.yml')),
+    () => fs.existsSync(path.join(projectDir, 'AGENTS.md')),
+    () => fs.existsSync(path.join(projectDir, 'LEDGER.md')),
+    () => fs.existsSync(path.join(projectDir, 'docs', 'ARCHITECTURE.md')),
+    () => fs.existsSync(path.join(projectDir, 'REQUIREMENTS.md')) || fs.existsSync(path.join(projectDir, 'docs', 'REQUIREMENTS.md')),
+    () => fs.existsSync(path.join(projectDir, 'docs', 'TEST_SPEC.md')),
+    () => fs.existsSync(path.join(projectDir, '.specsmith', 'trace-vault.jsonl')),
+    () => fs.existsSync(path.join(projectDir, 'CHANGELOG.md')),
+  ];
+  const passed  = checks.filter((fn) => { try { return fn(); } catch { return false; } }).length;
+  const pct     = Math.round((passed / checks.length) * 100);
+  const cat     = PHASE_CATALOG[key];
+
+  return { key, emoji: cat.emoji, label: cat.label, desc: cat.desc, pct, ready: pct === 100, next: cat.next };
+}
+
 // ── HTML ──────────────────────────────────────────────────────────────────────
 
 function _html(data: ProjectData): string {
@@ -578,6 +659,17 @@ function _html(data: ProjectData): string {
          border-radius:10px;padding:1px 7px;font-size:9px;font-weight:700;margin-left:4px}
   .filter-in{font-size:11px;padding:3px 6px;margin-bottom:4px;width:100%}
   .btn-row{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
+  /* Phase bar */
+  .phase-bar{display:flex;align-items:center;gap:8px;padding:5px 12px;
+             background:rgba(78,201,176,.06);border-bottom:1px solid rgba(78,201,176,.18);flex-shrink:0}
+  .phase-pill{display:inline-flex;align-items:center;gap:4px;background:rgba(78,201,176,.15);
+              border:1px solid var(--teal);border-radius:12px;padding:2px 9px;
+              font-size:11px;font-weight:700;color:var(--teal);white-space:nowrap}
+  .phase-desc{font-size:10px;color:var(--dim);flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .phase-prog{font-size:10px;color:var(--dim);white-space:nowrap}
+  .phase-sel{background:none;border:1px solid var(--br);border-radius:3px;color:var(--dim);
+             font-size:10px;padding:1px 4px;cursor:pointer}
+  .phase-sel:hover{border-color:var(--teal);color:var(--teal)}
 </style></head>
 <body>
 <div class="topbar">
@@ -587,6 +679,21 @@ function _html(data: ProjectData): string {
     <button class="btn-sm" onclick="sendToAgent('Run the session start protocol: sync, load AGENTS.md, check LEDGER.md.')">🤖 Agent</button>
   </div>
 </div>
+${(() => {
+    const p         = data.phase;
+    const phaseIdx  = PHASE_ORDER.indexOf(p.key);
+    const phaseOpts = PHASE_ORDER.map((k) => {
+      const c = PHASE_CATALOG[k];
+      return `<option value="${k}"${k === p.key ? ' selected' : ''}>${c.emoji} ${c.label}</option>`;
+    }).join('');
+    return `<div class="phase-bar">
+  <span class="phase-pill">${p.emoji} ${p.label}</span>
+  <span class="phase-desc" title="${p.desc}">${p.desc}</span>
+  <span class="phase-prog">${p.pct}% ready · step ${phaseIdx + 1}/7</span>
+  ${p.next ? `<button class="tb" onclick="phaseNext()" title="Advance to ${p.next}">→ ${p.next}</button>` : ''}
+  <select class="phase-sel" onchange="phaseSet(this.value)">${phaseOpts}</select>
+</div>`;
+  })()}
 ${ood ? `<div class="warn-banner">⚠ scaffold.yml spec_version <b>${s.spec_version}</b> older than installed <b>${data.installedVersion}</b><button class="tb" onclick="runCmd('upgrade')">↑ upgrade</button></div>` : ''}
 <div class="tab-bar">
   <button class="tab active" onclick="sw('project')">📁 Project</button>
@@ -719,6 +826,8 @@ function filt(inp,name){
     const c=cb.closest('.chip');if(c)c.style.display=(!q||cb.value.toLowerCase().includes(q))?'':'none';
   });
 }
+function phaseNext(){vscode.postMessage({command:'phaseNext'})}
+function phaseSet(key){if(key)vscode.postMessage({command:'phaseSet',phaseKey:key})}
 document.querySelectorAll('.chip').forEach(c=>{
   c.addEventListener('click',()=>c.classList.toggle('sel',c.querySelector('input').checked));
 });
