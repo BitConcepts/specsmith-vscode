@@ -1,6 +1,7 @@
 # specsmith — AEE Workbench
 
-[![specsmith](https://img.shields.io/badge/specsmith-v0.3.3%2B-4ec9b0)](https://github.com/BitConcepts/specsmith)
+[![specsmith](https://img.shields.io/badge/specsmith-v0.3.5%2B-4ec9b0)](https://github.com/BitConcepts/specsmith)
+[![Sponsor](https://img.shields.io/badge/sponsor-%E2%9D%A4-ea4aaa?logo=github)](https://github.com/sponsors/BitConcepts)
 [![VS Code](https://img.shields.io/badge/VS%20Code-1.85%2B-blue?logo=visualstudiocode)](https://code.visualstudio.com/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](https://github.com/BitConcepts/specsmith-vscode/blob/main/LICENSE)
 [![GitHub](https://img.shields.io/badge/GitHub-specsmith--vscode-black?logo=github)](https://github.com/BitConcepts/specsmith-vscode)
@@ -8,15 +9,15 @@
 **Applied Epistemic Engineering workbench for VS Code.**
 
 The specsmith AEE Workbench brings the full specsmith workflow into VS Code: AI agent sessions, the
-7-phase AEE workflow tracker, 5-tab governance panel, FPGA/HDL tool support, live Ollama model
-management, and epistemic engineering tools — all in a dedicated sidebar.
+7-phase AEE workflow tracker, **6-tab Settings panel**, execution profiles, FPGA/HDL tool support,
+live Ollama model management, and epistemic engineering tools — all in a dedicated sidebar.
 
 ---
 
 ## Requirements
 
 - VS Code 1.85+
-- [specsmith](https://github.com/BitConcepts/specsmith) v0.3.3+ on PATH
+- [specsmith](https://github.com/BitConcepts/specsmith) **v0.3.5+** on PATH
 - An LLM provider: API key (Anthropic/OpenAI/Gemini/Mistral) or local [Ollama](https://ollama.ai)
 
 ```bash
@@ -55,17 +56,19 @@ Each project runs an independent `specsmith run --json-events` agent process:
 - Session status icons in sidebar: 🟡 Starting / 🟢 Ready / ⚙ Running / ⚠ Error
 - Auto-start protocol: sync → load AGENTS.md → read LEDGER.md
 
-### 📋 5-Tab Governance Panel (`Ctrl+Shift+G`)
+### ⚙️ 6-Tab Settings Panel (`Ctrl+Shift+G`)
 
-**Project** — scaffold.yml form: name, type (35 project types), description, languages (multi-select with filter), VCS platform. Detect Languages scans your codebase automatically.
+**Project** — scaffold.yml form: name, type (35 project types), description, languages (multi-select with filter), VCS platform. Detect Languages + Scan Project auto-populate the form.
 
-**Tools** — FPGA/HDL tool chips (vivado, gtkwave, vsg, ghdl, verilator, yosys, nextpnr, symbiyosys, +13 more), agent integrations, target platforms. All saved to `scaffold.yml`.
+**Tools** — FPGA/HDL tool chips (21 tools), auxiliary disciplines for mixed projects, target platforms, installed Ollama models with Update/Remove buttons.
 
 **Files** — governance file status (scaffold.yml, AGENTS.md, REQUIREMENTS.md, TEST_SPEC.md, ARCHITECTURE.md, LEDGER.md) with Add/Open/Rename buttons.
 
-**Updates & System** — PyPI version check with Check/Install Update buttons, last-checked timestamp, system info: OS, CPU, cores, RAM, GPU, disk (lazy-loaded).
+**Updates & System** — PyPI version check; **Install Update** respects the `specsmith.releaseChannel` setting and swaps to **↺ Reload Window** after install. System info: OS, CPU, RAM, GPU, disk.
 
 **Actions & AI** — Quick actions grid (audit, validate, doctor, epistemic, stress-test, export) + 10 pre-written AI prompts routed to the active session.
+
+**Execution** — Execution profile selector (🔒 safe / ⚙️ standard / 🔓 open / ⚠ admin), custom allowed/blocked command overrides, and Tool Installer (scan + one-click install for missing tools).
 
 ### 🖥 Ollama — Local LLMs
 
@@ -146,7 +149,8 @@ The Governance Panel opens automatically when a workspace is present.
 | `specsmith.defaultProvider` | `anthropic` | Default LLM provider |
 | `specsmith.defaultModel` | `` | Default model (blank = provider default) |
 | `specsmith.ollamaContextLength` | `0` | Ollama context size (0 = auto-detect from GPU VRAM) |
-| `specsmith.autoOpenGovernancePanel` | `true` | Auto-open Governance Panel on VS Code start |
+| `specsmith.autoOpenGovernancePanel` | `true` | Auto-open Settings panel on VS Code start |
+| `specsmith.releaseChannel` | `stable` | Release channel for Install/Upgrade: `stable` or `pre-release` |
 
 ---
 
@@ -186,7 +190,7 @@ independently, and tested without VS Code.
 src/
   extension.ts       — activation, command registration, session tree
   SessionPanel.ts    — WebviewPanel with chat UI and bridge lifecycle
-  GovernancePanel.ts — 5-tab governance webview (phase, scaffold, tools, files, updates, AI)
+  GovernancePanel.ts — 6-tab Settings webview (phase, scaffold, tools, files, updates, actions, execution)
   ProjectTree.ts     — sidebar project tree with governance docs and file operations
   OllamaManager.ts   — GPU detection, model catalog, download, recommendations
   ModelRegistry.ts   — live model lists from provider REST APIs with 5-min cache
@@ -227,9 +231,17 @@ Press `F5` in VS Code to open an Extension Development Host window.
 
 ---
 
+## Supporting the Project
+
+If specsmith is saving you time, consider [sponsoring BitConcepts](https://github.com/sponsors/BitConcepts) or ⭐ starring both repos. It helps prioritize features and bug fixes.
+
+---
+
 ## Links
 
 - [specsmith CLI](https://github.com/BitConcepts/specsmith)
 - [Documentation](https://specsmith.readthedocs.io)
 - [AEE Workflow Phases](https://specsmith.readthedocs.io/en/stable/commands/#specsmith-phase)
 - [Ollama](https://ollama.ai)
+- [Sponsor BitConcepts](https://github.com/sponsors/BitConcepts)
+- [Contributing](CONTRIBUTING.md)

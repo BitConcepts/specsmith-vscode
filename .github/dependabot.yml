@@ -1,0 +1,25 @@
+version: 2
+updates:
+  # npm dependencies (package-lock.json)
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+    groups:
+      # Group all @types/* updates together
+      type-stubs:
+        patterns:
+          - "@types/*"
+
+  # GitHub Actions workflow pins
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "github-actions"

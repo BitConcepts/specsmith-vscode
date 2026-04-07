@@ -2,6 +2,38 @@
 
 All notable changes to the VS Code extension are documented here.
 
+## [0.3.3] — 2026-04-07
+
+### Added
+- **6-tab Settings panel** — new **🛡 Execution** tab with: profile selector (`🔒 safe` / `⚙ standard` / `🔓 open` / `⚠ admin`), live profile description, custom allowed/blocked command overrides (saved to `scaffold.yml`), and Tool Installer section (scan + Install button per missing tool).
+- **`specsmith.releaseChannel` setting** — `stable` (default) or `pre-release`. Controls which version `Install or Upgrade` and the Install Update button install. Pre-release uses `pip install --pre` / `pipx install --pip-args="--pre" --force`.
+- **Settings panel auto-opens alongside sessions** — `openSession()` now always calls `showGovernancePanel()`, so there is never a blank secondary panel after opening a session.
+- **`reloadWindow` message handler** — webview can request a VS Code window reload.
+
+### Changed
+- **Install Update → ↺ Reload Window** — clicking Install Update opens the upgrade terminal and immediately swaps the button to `↺ Reload Window` (class `btn-rel`) so users can reload after the install finishes without searching for the old toast.
+- **Check for Updates** no longer resets the active tab — removed `_reload()` call; the webview JS updates version labels in-place via the `versionInfo` message.
+- **Button visibility** — `.btn-sm`, `.tb`, `.qa-btn` now use `color:var(--fg)` with a subtle background tint (was `color:var(--dim)`, hard to see). Hover state highlights in teal. Added `btn-rel` class for post-install reload button.
+- Topbar buttons now have labels: `↺ Refresh` and `🤖 Agent`.
+
+---
+
+## [0.3.2] — 2026-04-07
+
+### Added
+- **AMD Adaptive Computing rebrand** — `fpga-rtl-amd` replaces `fpga-rtl-xilinx` in project type list (legacy id still accepted). Label updated to `FPGA / RTL — AMD Adaptive Computing (Vivado)`.
+- **Tools tab: Ollama model manager** — ‘🗎 Installed Ollama Models’ section with Refresh, Update (per-model `ollama pull`), Remove, and Update All buttons. All Ollama operations bypass the specsmith CLI and call `ollama pull` / `ollama rm` directly.
+- **Tools tab: Auxiliary Disciplines** — chips for mixed-discipline projects (FPGA + embedded C, FPGA + Python verification, etc.). Saved as `auxiliary_disciplines:` in scaffold.yml.
+- **Scan Project** — runs `specsmith scan --json` and auto-fills name, type, languages, FPGA tools, and VCS platform in the Project tab.
+- **Version comparison fix** — `_isNewerVersion()` semver comparator replaces `!==` check; Install Update button only appears when PyPI version is strictly newer than installed.
+
+### Changed
+- Panel renamed from "Governance Panel" to **"⚙ Settings"** to better reflect its current role.
+- Removed Agent Integrations chip section from Tools tab (VS Code IS the agent integration).
+- `ollamaUpdateModel`, `ollamaUpdateAll`, `ollamaUpgrade` now use `ollama pull` directly — no dependency on specsmith CLI version.
+
+---
+
 ## [0.3.1] — 2026-04-07
 
 ### Added
