@@ -322,7 +322,12 @@ function _loadProjectData(projectDir: string, context: vscode.ExtensionContext):
     // session (bridge) and the Settings panel version display.
     const resolved = findSpecsmith(exec, _ENV.PATH ?? '');
     const r = cp.spawnSync(resolved, ['--version'], { timeout: 3000, encoding: 'utf8' });
-    if (r.status === 0) { const m = (r.stdout ?? '').match(/(\d+\.\d+\.\d+)/); installedVersion = m?.[1] ?? null; }
+    if (r.status === 0) {
+      // Capture the full PEP 440 version including pre-release suffix (.devN, aN, bN, rcN)
+      // so the panel shows "0.3.6.dev171" rather than stripping it to "0.3.6".
+      const m = (r.stdout ?? '').match(/(\d+\.\d+\.\d+(?:\.dev\d+|a\d+|b\d+|rc\d+)?)/);
+      installedVersion = m?.[1] ?? null;
+    }
   } catch { /* ignore */ }
 
   const avail     = context.globalState.get<string>('specsmith.availableVersion', '');
@@ -455,12 +460,25 @@ async function _handleMsg(msg: GovMsg): Promise<void> {
       break;
 
     case 'ollamaUpgrade': {
-      // Use platform-specific upgrade command directly — bypasses specsmith CLI
-      const upgradeCmd = process.platform === 'win32'
-        ? 'winget upgrade --id Ollama.Ollama'
-        : process.platform === 'darwin'
-          ? 'brew upgrade ollama'
-          : 'curl -fsSL https://ollama.ai/install.sh | sh';
+      // Windows: try winget first; winget packages sometimes lag behind GitHub releases
+      // by a day or two, so if it reports no update we open the download page instead.
+      // macOS/Linux: standard package manager paths always have the latest.
+      let upgradeCmd: string;
+      if (process.platform === 'win32') {
+        // PowerShell: run winget, and if it exits non-zero (no update available) open browser.
+        upgradeCmd = [
+          'winget upgrade --id Ollama.Ollama',
+          "if ($LASTEXITCODE -ne 0) {",
+          "  Write-Host 'winget has no Ollama update yet (package may lag GitHub releases).';",
+          "  Write-Host 'Opening https://ollama.ai/download in your browser...';",
+          "  Start-Process 'https://ollama.ai/download'",
+          '}',
+        ].join(' ; ');
+      } else if (process.platform === 'darwin') {
+        upgradeCmd = 'brew upgrade ollama';
+      } else {
+        upgradeCmd = 'curl -fsSL https://ollama.ai/install.sh | sh';
+      }
       const term4 = vscode.window.createTerminal({ name: 'ollama upgrade', shellPath: _shellPath() });
       term4.sendText(upgradeCmd);
       term4.show();
@@ -1080,9 +1098,11 @@ function _html(data: ProjectData): string {
   const s     = data.scaffold;
   const activeChannel = data.releaseChannel ?? 'stable';
   const ood   = s.spec_version && data.installedVersion && s.spec_version < data.installedVersion;
-  // Only show 'update available' when PyPI version is STRICTLY NEWER than installed
+  // Only show 'update available' when PyPI version is STRICTLY NEWER than installed.
+  // Use _cmpVer (PEP 440-aware) instead of _isNewerVersion which only checks MAJOR.MINOR.PATCH
+  // and incorrectly treats 0.3.6.dev176 == 0.3.6.
   const upd = data.availableVersion && data.installedVersion
-    && _isNewerVersion(data.availableVersion, data.installedVersion);
+    && _cmpVer(data.availableVersion, data.installedVersion) > 0;
 
   const selL = s.languages ?? [], selI = s.integrations ?? [], selP = s.platforms ?? [],
         selF = s.fpga_tools ?? [], selAux = s.auxiliary_disciplines ?? [];
@@ -1524,10 +1544,22 @@ window.addEventListener('message',({data})=>{
       // Compare semver: only show Install Update if PyPI version is NEWER than installed
       const instEl=document.querySelector('.ver-val');
       const installed=(instEl&&instEl.textContent&&instEl.textContent!=='\u2014')?instEl.textContent.trim():'';
+      // PEP 440-aware comparison — handles .devN, aN, bN, rcN suffixes correctly.
+      // The old semverGt used parseInt which coerced "dev176" to 0, making
+      // 0.3.6.dev176 appear equal to 0.3.6 and suppressing the update banner.
       function semverGt(a,b){
-        const p=s=>s.split('.').map(n=>parseInt(n)||0);
-        const av=p(a),bv=p(b);
-        for(let i=0;i<3;i++){if((av[i]||0)>(bv[i]||0))return true;if((av[i]||0)<(bv[i]||0))return false;}
+        function parseVer(v){
+          const m=v.match(/^(\d+)\.(\d+)\.(\d+)(?:\.(dev)(\d+)|a(\d+)|b(\d+)|rc(\d+))?/);
+          if(!m)return[0,0,0,0];
+          let pre=999999;
+          if(m[4]!==undefined&&m[5]!==undefined)pre=parseInt(m[5])||0;          // .devN
+          else if(m[6]!==undefined)pre=10000+(parseInt(m[6])||0);               // aN
+          else if(m[7]!==undefined)pre=20000+(parseInt(m[7])||0);               // bN
+          else if(m[8]!==undefined)pre=30000+(parseInt(m[8])||0);               // rcN
+          return[parseInt(m[1])||0,parseInt(m[2])||0,parseInt(m[3])||0,pre];
+        }
+        const av=parseVer(a),bv=parseVer(b);
+        for(let i=0;i<4;i++){if(av[i]>bv[i])return true;if(av[i]<bv[i])return false;}
         return false;
       }
       if(installed&&semverGt(data.available,installed)){
