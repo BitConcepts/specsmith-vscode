@@ -354,7 +354,8 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
   );
 
-  // Startup: fetch models, update check, and auto-open Settings panel
+  // Startup: privacy notice (first install only), fetch models, update check
+  void _showFirstRunPrivacyNotice(context);
   void _startupFetchModels(context);
   void _checkForSpecsmithUpdate(context);
   void _autoOpenGovernancePanel(context, openSession);
@@ -725,6 +726,29 @@ export function activate(context: vscode.ExtensionContext): void {
 export function deactivate(): void { /* context.subscriptions handles cleanup */ }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
+
+/**
+ * Show a one-time privacy notice on first install.
+ * Stores a flag in globalState so it only fires once.
+ */
+async function _showFirstRunPrivacyNotice(context: vscode.ExtensionContext): Promise<void> {
+  const KEY = 'specsmith.privacyNoticeSeen.v1';
+  if (context.globalState.get<boolean>(KEY)) { return; }
+  await context.globalState.update(KEY, true);
+
+  const action = await vscode.window.showInformationMessage(
+    'specsmith collects no telemetry. ' +
+    'Your messages are sent only to the LLM provider you configure (Anthropic, OpenAI, Gemini, Ollama, etc.). ' +
+    'The optional bug reporter requires your explicit consent before filing anything.',
+    'View Privacy Policy',
+    'OK',
+  );
+  if (action === 'View Privacy Policy') {
+    void vscode.env.openExternal(
+      vscode.Uri.parse('https://github.com/BitConcepts/specsmith-vscode/blob/main/PRIVACY.md'),
+    );
+  }
+}
 
 /**
  * Synchronously probe the specsmith executable. Tries the configured path

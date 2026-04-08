@@ -764,7 +764,11 @@ function addE(m){
   d.dataset.errTitle=short;
   d.dataset.errDetail=long||'';
   C.appendChild(d);sb2()}
-function rptBug(btn){const el=btn.closest('.el');const t=el?.dataset.errTitle||'specsmith error';const det=el?.dataset.errDetail||'';
+function rptBug(btn){
+  const el=btn.closest('.el');const t=el?.dataset.errTitle||'specsmith error';const det=el?.dataset.errDetail||'';
+  // Show consent summary before sending anything
+  const preview=det?t.slice(0,80)+'\\n\\nError detail will be included (may contain file paths).':t.slice(0,80);
+  if(!confirm('Report this bug to GitHub?\\n\\nWhat will be sent:\\n• Error summary\\n• specsmith version\\n• VS Code version + OS\\n• Error detail text (may include local file paths)\\n\\n'+preview+'\\n\\nThis will search BitConcepts/specsmith-vscode for a duplicate issue and either comment on it or create a new one. Proceed?'))return;
   vscode.postMessage({command:'reportBug',bugTitle:'[specsmith-vscode] '+t.slice(0,100),bugDetail:det.slice(0,3000)});
   btn.textContent='✓ Reported';btn.disabled=true;}
 function addImg(u,l){const d=document.createElement('div');d.className='mu';

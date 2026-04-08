@@ -118,8 +118,25 @@ export interface BugReport {
  * Checks for duplicates first, then either comments on an existing issue or
  * creates a new one.  Falls back to clipboard if `gh` is unavailable.
  */
-export async function reportBug(report: BugReport): Promise<void> {
+export async function reportBug(report: BugReport, skipConsent = false): Promise<void> {
   const { title, summary, detail, specsmithVersion, platform } = report;
+
+  // ── Consent gate ────────────────────────────────────────────────────────────
+  // Never submit data without explicit user confirmation.
+  if (!skipConsent) {
+    const privacyNote = detail
+      ? 'The error detail text may contain local file paths from your machine.'
+      : '';
+    const ans = await vscode.window.showInformationMessage(
+      `Report this bug to GitHub (BitConcepts/specsmith-vscode)?\n\n` +
+      `What will be included: error summary, specsmith version, VS Code version, OS platform.\n` +
+      (privacyNote ? privacyNote + '\n' : '') +
+      `GitHub will search for a duplicate issue first.`,
+      { modal: true },
+      'Send Report',
+    );
+    if (ans !== 'Send Report') { return; } // user cancelled — do nothing
+  }
 
   // Build a rich issue body
   const body = [
@@ -228,10 +245,14 @@ export async function promptAndReportBug(opts?: {
   });
   if (summary === undefined) { return; }
 
-  await reportBug({
-    title: title.trim(),
-    summary: summary.trim() || '(no description provided)',
-    detail: opts?.prefillDetail,
-    specsmithVersion: opts?.specsmithVersion,
-  });
+  // skipConsent=false so reportBug still shows the final confirmation modal
+  await reportBug(
+    {
+      title: title.trim(),
+      summary: summary.trim() || '(no description provided)',
+      detail: opts?.prefillDetail,
+      specsmithVersion: opts?.specsmithVersion,
+    },
+    false,
+  );
 }

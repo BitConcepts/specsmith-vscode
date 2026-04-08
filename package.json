@@ -10,6 +10,7 @@
   "keywords": ["ai", "agent", "epistemic", "requirements", "governance", "specsmith", "fpga", "hdl", "ollama", "execution-profiles"],
   "icon": "media/specsmith-128.png",
   "repository": { "type": "git", "url": "https://github.com/BitConcepts/specsmith-vscode" },
+  "privacyPolicy": "https://github.com/BitConcepts/specsmith-vscode/blob/main/PRIVACY.md",
   "activationEvents": ["onStartupFinished"],
   "main": "./out/extension.js",
   "contributes": {
