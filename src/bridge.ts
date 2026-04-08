@@ -17,41 +17,47 @@ import * as readline from 'readline';
 import { SpecsmithEvent, SessionConfig, SessionStatus } from './types';
 
 /**
- * Return an env object with known pipx/pip bin directories prepended to PATH.
- * VS Code's Extension Host process may not inherit the user's full shell PATH.
+ * Return an env object that guarantees known pipx/pip bin directories are on
+ * PATH. The real PATH always comes FIRST so the extension resolves the same
+ * specsmith binary the user's terminal would find. The extra directories are
+ * appended as a fallback for VS Code extension-host environments where the
+ * shell PATH was not fully inherited (e.g. launched from the taskbar/dock).
  */
 export function augmentedEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const env = { ...base };
-  const extra: string[] = [];
+  const fallback: string[] = [];
 
   if (process.platform === 'win32') {
-    const local  = process.env.LOCALAPPDATA ?? path.join(os.homedir(), 'AppData', 'Local');
-    const roaming = process.env.APPDATA     ?? path.join(os.homedir(), 'AppData', 'Roaming');
+    const local   = process.env.LOCALAPPDATA ?? path.join(os.homedir(), 'AppData', 'Local');
+    const roaming = process.env.APPDATA      ?? path.join(os.homedir(), 'AppData', 'Roaming');
 
-    // pythoncore-* FIRST (pip installs — typically newer than pipx)
+    // Preferred: pipx shims (.local\bin) — single canonical install
+    fallback.push(
+      path.join(os.homedir(), '.local', 'bin'),            // pipx shims (recommended)
+      path.join(local,   'pipx', 'bin'),                   // pipx alt location
+      path.join(local,   'Programs', 'Python', 'Scripts'), // pip user (Python 3.11+)
+      path.join(roaming, 'Python', 'Scripts'),             // pip user (older Python)
+    );
+
+    // pythoncore-* subdirs as last resort
     try {
       const pyBase = path.join(local, 'Python');
       if (fs.existsSync(pyBase)) {
         for (const entry of fs.readdirSync(pyBase, { withFileTypes: true })) {
           if (entry.isDirectory() && entry.name.startsWith('pythoncore')) {
-            extra.push(path.join(pyBase, entry.name, 'Scripts'));
+            fallback.push(path.join(pyBase, entry.name, 'Scripts'));
           }
         }
       }
     } catch { /* ignore */ }
-
-    extra.push(
-      path.join(local,   'Programs', 'Python', 'Scripts'), // pip user (Python 3.11+)
-      path.join(roaming, 'Python', 'Scripts'),             // pip user (older Python)
-      path.join(os.homedir(), '.local', 'bin'),            // alternate pipx location
-      path.join(local,   'pipx', 'bin'),                   // pipx (last — may be older)
-    );
   } else {
-    extra.push(path.join(os.homedir(), '.local', 'bin'), '/usr/local/bin');
+    fallback.push(path.join(os.homedir(), '.local', 'bin'), '/usr/local/bin');
   }
 
   const current = env.PATH ?? '';
-  env.PATH = [...extra, current].join(path.delimiter);
+  // Real PATH first — extension finds the same binary as the terminal.
+  // Fallback dirs are only reached if specsmith is absent from the real PATH.
+  env.PATH = [current, ...fallback].join(path.delimiter);
   return env;
 }
 
