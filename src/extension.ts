@@ -367,13 +367,11 @@ export function activate(context: vscode.ExtensionContext): void {
       const isInstalled = version !== null;
       const items: vscode.QuickPickItem[] = isInstalled
         ? [
-            { label: '$(arrow-up) Upgrade specsmith via pipx', description: `current: ${version}` },
-            { label: '$(arrow-up) Upgrade specsmith via pip', description: 'pip install --upgrade specsmith' },
-            { label: '$(info) Copy install path to clipboard', description: execPath },
+            { label: '$(arrow-up) Upgrade specsmith via pipx',       description: `current: ${version} → pipx upgrade specsmith` },
+            { label: '$(info) Copy specsmith path to clipboard',      description: execPath },
           ]
         : [
-            { label: '$(cloud-download) Install via pipx (recommended)', description: 'pipx install specsmith[anthropic]' },
-            { label: '$(cloud-download) Install via pip',                 description: 'pip install specsmith[anthropic]' },
+            { label: '$(cloud-download) Install via pipx',           description: 'pipx install specsmith (then pipx inject specsmith anthropic)' },
           ];
 
       const picked = await vscode.window.showQuickPick(items, {
@@ -394,18 +392,15 @@ export function activate(context: vscode.ExtensionContext): void {
 
       const channel = cfg.get<string>('releaseChannel', 'stable');
       const isPre    = channel === 'pre-release';
-      if (picked.label.includes('pipx') && isInstalled) {
+      if (picked.label.includes('Upgrade')) {
         // --pre not supported by pipx upgrade; reinstall with force instead
         term.sendText(isPre
           ? 'pipx install specsmith --pip-args="--pre" --force'
           : 'pipx upgrade specsmith');
-      } else if (picked.label.includes('pipx')) {
+      } else if (picked.label.includes('Install')) {
         term.sendText(isPre
-          ? 'pipx install "specsmith[anthropic]" --pip-args="--pre"'
-          : 'pipx install "specsmith[anthropic]"');
-      } else {
-        const flag = isInstalled ? '--upgrade' : '--user';
-        term.sendText(`pip install ${flag}${isPre ? ' --pre' : ''} "specsmith[anthropic]"`);
+          ? 'pipx install specsmith --pip-args="--pre"'
+          : 'pipx install specsmith');
       }
 
       void vscode.window.showInformationMessage(
