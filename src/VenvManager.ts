@@ -72,12 +72,15 @@ export function buildCreateVenvCommands(
   providers: string[],
 ): string[] {
   const venvPath = getGlobalVenvDir();
+  // On Windows, quoted paths must be prefixed with the & call operator.
+  // Without &, PowerShell treats '"C:\path\exe.exe"' as a string expression
+  // and produces 'Expressions are only allowed as the first element of a pipeline'.
   const pip = process.platform === 'win32'
-    ? `"${path.join(venvPath, 'Scripts', 'pip.exe')}"`
+    ? `& "${path.join(venvPath, 'Scripts', 'pip.exe')}"`
     : `"${path.join(venvPath, 'bin', 'pip')}"`;
   // pip cannot upgrade itself on Windows — use python -m pip
   const pythonExe = process.platform === 'win32'
-    ? `"${path.join(venvPath, 'Scripts', 'python.exe')}"`
+    ? `& "${path.join(venvPath, 'Scripts', 'python.exe')}"`
     : `"${path.join(venvPath, 'bin', 'python3')}"`;
   const specsmithPkg = channel === 'pre-release' ? 'specsmith --pre' : 'specsmith';
   const providerPkgs = providers.length > 0 ? providers.join(' ') : '';
@@ -86,7 +89,7 @@ export function buildCreateVenvCommands(
     `${pythonExe} -m pip install --quiet --upgrade pip`,
     `${pip} install --quiet ${specsmithPkg}`,
     ...(providerPkgs ? [`${pip} install --quiet ${providerPkgs}`] : []),
-    `echo "specsmith environment ready at: ${venvPath}"`,
+    `Write-Host "specsmith environment ready at: ${venvPath}"`,
   ];
 }
 
@@ -94,7 +97,7 @@ export function buildCreateVenvCommands(
 export function buildUpdateVenvCommand(channel: 'stable' | 'pre-release'): string {
   const venvPath = getGlobalVenvDir();
   const pip = process.platform === 'win32'
-    ? `"${path.join(venvPath, 'Scripts', 'pip.exe')}"`
+    ? `& "${path.join(venvPath, 'Scripts', 'pip.exe')}"`
     : `"${path.join(venvPath, 'bin', 'pip')}"`;
   return channel === 'pre-release'
     ? `${pip} install --upgrade --pre specsmith`

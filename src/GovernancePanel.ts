@@ -321,7 +321,9 @@ async function _handleMsg(msg: GovMsg): Promise<void> {
       const exec = venvBin
         ?? vscode.workspace.getConfiguration('specsmith').get<string>('executablePath', 'specsmith');
       const term = vscode.window.createTerminal({ name: 'specsmith', cwd: _projectDir });
-      term.sendText(`"${exec}" ${msg.cmd} --project-dir "${_projectDir}"`);
+      // & call operator required on Windows when the path is quoted
+      const callPrefix = process.platform === 'win32' ? '& ' : '';
+      term.sendText(`${callPrefix}"${exec}" ${msg.cmd} --project-dir "${_projectDir}"`);
       term.show();
       break;
     }
