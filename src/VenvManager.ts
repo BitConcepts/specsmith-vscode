@@ -82,10 +82,16 @@ export function buildCreateVenvCommands(
 ): string[] {
   const venvPath = path.join(projectDir, VENV_DIR);
 
-  // Platform-specific pip/python paths inside the venv (before venv is created)
+  // Platform-specific pip path for installs
   const pip = process.platform === 'win32'
     ? `"${path.join(venvPath, 'Scripts', 'pip.exe')}"`
     : `"${path.join(venvPath, 'bin', 'pip')}"`;
+
+  // On Windows, pip cannot upgrade itself via 'pip install --upgrade pip';
+  // the runtime locks the file. Use 'python -m pip ...' instead.
+  const pythonExe = process.platform === 'win32'
+    ? `"${path.join(venvPath, 'Scripts', 'python.exe')}"`
+    : `"${path.join(venvPath, 'bin', 'python3')}"`;
 
   const specsmithPkg = channel === 'pre-release'
     ? 'specsmith --pre'
@@ -96,8 +102,8 @@ export function buildCreateVenvCommands(
   const cmds: string[] = [
     // Create venv
     `python -m venv "${venvPath}" --prompt specsmith-env`,
-    // Upgrade pip silently
-    `${pip} install --quiet --upgrade pip`,
+    // Upgrade pip via python -m pip (required on Windows — pip cannot upgrade itself)
+    `${pythonExe} -m pip install --quiet --upgrade pip`,
     // Install specsmith (with channel flag)
     `${pip} install --quiet ${specsmithPkg}`,
     // Install provider packages if any
