@@ -336,39 +336,63 @@ export class SessionPanel implements vscode.Disposable {
         if (msg.provider) { void this._refreshModels(msg.provider); }
         break;
 
-      case 'pickFile':
+      case 'pickFile': {
+        const INLINE_LIMIT = 50 * 1024; // 50 KB — matches webview threshold
         void vscode.window.showOpenDialog({
           canSelectMany: false, canSelectFiles: true, canSelectFolders: false,
           defaultUri: vscode.Uri.file(this._config.projectDir),
           title: 'Inject a file as context',
         }).then((uris) => {
           if (!uris?.[0]) { return; }
-          const fp = uris[0].fsPath;
-          const fn = path.basename(fp);
+          const fp  = uris[0].fsPath;
+          const fn  = path.basename(fp);
           const ext = path.extname(fp).toLowerCase();
           const imgs = new Set(['.png','.jpg','.jpeg','.gif','.webp','.bmp','.svg']);
+          const isPdf = ext === '.pdf';
           if (imgs.has(ext)) {
+            // Image: send base64 dataURL for thumbnail display
             const b64  = fs.readFileSync(fp).toString('base64');
             const mime = ext === '.svg' ? 'image/svg+xml' : `image/${ext.slice(1)}`;
             void this._panel.webview.postMessage({
               type: 'file_picked', fileName: fn, isImage: true,
               dataUrl: `data:${mime};base64,${b64}`,
             } satisfies SpecsmithEvent);
+          } else if (isPdf) {
+            // PDF: send as path reference
+            void this._panel.webview.postMessage({
+              type: 'file_picked', fileName: fn, isImage: false,
+              fileContent: `[PDF: ${fp} — use read_file tool to parse content]`,
+            } satisfies SpecsmithEvent);
           } else {
             try {
-              const content = fs.readFileSync(fp, 'utf8');
-              void this._panel.webview.postMessage({
-                type: 'file_picked', fileName: fn, isImage: false,
-                fileContent: content.slice(0, 50000),
-              } satisfies SpecsmithEvent);
+              const stat = fs.statSync(fp);
+              if (stat.size > INLINE_LIMIT) {
+                // Large file: path reference + brief preview
+                const preview = fs.readFileSync(fp, 'utf8').split('\n').slice(0, 6).join('\n');
+                const sizeStr = stat.size < 1048576
+                  ? `${(stat.size / 1024).toFixed(0)}KB`
+                  : `${(stat.size / 1048576).toFixed(1)}MB`;
+                void this._panel.webview.postMessage({
+                  type: 'file_picked', fileName: fn, isImage: false,
+                  fileContent: `[Large file: ${fp} (${sizeStr}) — use read_file tool for full content]\nPreview:\n${preview}\n…`,
+                } satisfies SpecsmithEvent);
+              } else {
+                const content = fs.readFileSync(fp, 'utf8');
+                void this._panel.webview.postMessage({
+                  type: 'file_picked', fileName: fn, isImage: false,
+                  fileContent: content,
+                } satisfies SpecsmithEvent);
+              }
             } catch {
               void this._panel.webview.postMessage({
-                type: 'system', message: `Cannot read ${fn} as text`,
+                type: 'file_picked', fileName: fn, isImage: false,
+                fileContent: `[File: ${fp} — could not read as text, use read_file tool]`,
               } satisfies SpecsmithEvent);
             }
           }
         });
         break;
+      }
 
       case 'exportChat':
         if (msg.markdown) {
@@ -885,12 +909,64 @@ document.addEventListener('dragleave',e=>{
   // Only hide when cursor leaves the entire document (not just an element)
   if(!e.relatedTarget||e.relatedTarget===document.documentElement)_dhd();
 });
-/* Paste images */
-document.addEventListener('paste',e=>{const items=e.clipboardData?.items||[];for(const it of items){if(it.type.startsWith('image/')){const f=it.getAsFile();if(f){e.preventDefault();inj(f)}}}});
-function inj(file){const im=file.type.startsWith('image/'),tx=file.type.startsWith('text/')||/\\.(md|txt|py|ts|js|json|yaml|yml|toml|sh|go|rs|c|cpp|h|cs|java)$/i.test(file.name);const rd=new FileReader();
-  if(im){rd.onload=ev=>{const u=ev.target.result;addImg(u,file.name);const i=document.getElementById('it');i.value=\`[Image: \${file.name}]\\n\${i.value}\`};rd.readAsDataURL(file)}
-  else if(tx||file.size<500000){rd.onload=ev=>{const c=ev.target.result;const p=c.length>8000?c.slice(0,8000)+'\\n…':c;const i=document.getElementById('it');i.value=\`[File: \${file.name}]\\n\\\`\\\`\\\`\\n\${p}\\n\\\`\\\`\\\`\\n\\n\${i.value}\`};rd.readAsText(file)}
-  else addS(\`Cannot inject \${file.name} (binary)\`)}
+/* Paste images + text */
+document.addEventListener('paste',e=>{
+  const items=e.clipboardData?.items||[];
+  for(const it of items){
+    if(it.type.startsWith('image/')){const f=it.getAsFile();if(f){e.preventDefault();inj(f)}}
+    else if(it.type==='text/plain'){
+      // Allow default paste for plain text in the textarea
+    }
+  }
+});
+/* Smart injection — handles images, text, large files, PDFs, and binaries.
+   file.path is a VS Code webview extension to DataTransfer File that gives
+   the absolute local path for files dragged from the OS or VS Code explorer. */
+const _INLINE_LIMIT=50*1024; // 50 KB — above this use path reference
+const _TEXT_EXTS=/\\.(md|txt|py|pyi|ts|tsx|js|jsx|json|yaml|yml|toml|sh|bash|zsh|ps1|go|rs|c|cc|cpp|cxx|h|hpp|cs|java|kt|swift|rb|php|sql|xml|css|scss|less|html|htm|vue|svelte|vhd|vhdl|sv|v|tcl|cmake|makefile|dockerfile|conf|ini|env|gitignore|editorconfig)$/i;
+function _ext(name){return(name.split('.').pop()||'').toLowerCase()}
+function _kb(sz){return sz<1024?sz+'B':(sz<1048576?(sz/1024).toFixed(0)+'KB':(sz/1048576).toFixed(1)+'MB')}
+function inj(file){
+  const im=file.type.startsWith('image/');
+  const isPdf=file.type==='application/pdf'||/\\.pdf$/i.test(file.name);
+  const isTxt=file.type.startsWith('text/')||_TEXT_EXTS.test(file.name);
+  const fp=file.path||''; // VS Code webview provides full OS path for local file drops
+  const it=document.getElementById('it');
+  const rd=new FileReader();
+  if(im){
+    // Images: thumbnail in chat + [Image:] prefix in input
+    rd.onload=ev=>{const u=ev.target.result;addImg(u,file.name);it.value=\`[Image: \${fp||file.name}]\\n\${it.value}\`};
+    rd.readAsDataURL(file);
+  }else if(isPdf){
+    // PDFs: path reference with read_file note (no binary inline)
+    const ref=fp||file.name;
+    it.value=\`[PDF: \${ref} (\${_kb(file.size)}) — use read_file tool to parse content]\\n\\n\${it.value}\`;
+    addS(\`📎 PDF attached: \${file.name}\`);
+  }else if(isTxt&&file.size<=_INLINE_LIMIT){
+    // Small text files: inline as fenced code block
+    rd.onload=ev=>{
+      const c=ev.target.result;
+      const lang=_ext(file.name);
+      it.value=\`[File: \${fp||file.name}]\\n\\\`\\\`\\\`\${lang}\\n\${c}\\n\\\`\\\`\\\`\\n\\n\${it.value}\`;
+      it.focus();
+    };
+    rd.readAsText(file);
+  }else if(isTxt&&file.size>_INLINE_LIMIT){
+    // Large text files: path reference + short preview
+    rd.onload=ev=>{
+      const preview=ev.target.result.split('\\n').slice(0,6).join('\\n');
+      const ref=fp||file.name;
+      it.value=\`[Large file: \${ref} (\${_kb(file.size)}) — use read_file tool for full content]\\nPreview:\\n\${preview}\\n…\\n\\n\${it.value}\`;
+    };
+    rd.readAsText(file);
+  }else if(fp){
+    // Binary with known path: inject reference
+    it.value=\`[File: \${fp} (binary \${_kb(file.size)}) — use read_file tool to access]\\n\\n\${it.value}\`;
+    addS(\`📎 Binary attached: \${file.name}\`);
+  }else{
+    addS(\`Cannot inject \${file.name} (binary \${_kb(file.size)}) — drag from VS Code explorer to get a path reference\`);
+  }
+}
 /* Resize handle — controls TEXTAREA height. Drag UP = bigger textarea, drag DOWN = smaller.
    Chat takes all remaining space (flex:1) so it auto-shrinks as textarea grows. */
 (()=>{
@@ -937,7 +1013,17 @@ window.addEventListener('message',({data})=>{switch(data.type){
     addA(data.text||'', data.message);
     break;
   case 'file_picked':if(data.isImage&&data.dataUrl){addImg(data.dataUrl,data.fileName||'img');const i=document.getElementById('it');i.value=\`[Image: \${data.fileName}]\\n\${i.value}\`}
-    else if(data.fileContent!==undefined){const i=document.getElementById('it');const p=data.fileContent.length>8000?data.fileContent.slice(0,8000)+'\\n…':data.fileContent;i.value=\`[File: \${data.fileName}]\\n\\\`\\\`\\\`\\n\${p}\\n\\\`\\\`\\\`\\n\\n\${i.value}\`;i.focus()}break;
+    else if(data.fileContent!==undefined){
+      const i=document.getElementById('it');
+      // Path/reference blocks start with '[' — inject verbatim without fenced block wrapper
+      if(data.fileContent.startsWith('[')){
+        i.value=\`\${data.fileContent}\\n\\n\${i.value}\`;
+      }else{
+        const lang=(data.fileName||'').split('.').pop()||'';
+        i.value=\`[File: \${data.fileName}]\\n\\\`\\\`\\\`\${lang}\\n\${data.fileContent}\\n\\\`\\\`\\\`\\n\\n\${i.value}\`;
+      }
+      i.focus();
+    }break;
 }});
 vscode.postMessage({command:'ready'});
 </script>
