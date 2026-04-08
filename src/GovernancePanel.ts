@@ -1,20 +1,19 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 BitConcepts, LLC. All rights reserved.
 /**
- * GovernancePanel v3 — 6-tab Settings panel.
+ * GovernancePanel — Project Settings panel.
  *
- * Tabs:  Project | Tools | Files | Updates & System | Actions & AI | Execution
+ * Tabs:  Project | Tools | Files | Actions | Execution
+ *
+ * Global settings (specsmith version, venv, Ollama, system info) live in
+ * SettingsPanel — open via Ctrl+Shift+P → specsmith: Settings.
  */
 import * as vscode from 'vscode';
 import * as cp from 'child_process';
 import * as fs from 'fs';
-import * as os from 'os';
 import * as path from 'path';
 import { augmentedEnv, findSpecsmith } from './bridge';
-import {
-  getGlobalVenvDir, venvExists, getVenvSpecsmith,
-  getVenvSpecsmithVersion, buildCreateVenvCommands, buildUpdateVenvCommand, buildDeleteVenvCommands,
-} from './VenvManager';
+import { getVenvSpecsmith } from './VenvManager';
 
 let _panel: vscode.WebviewPanel | undefined;
 let _ctx: vscode.ExtensionContext | undefined;
@@ -50,7 +49,7 @@ export function showGovernancePanel(
 
   _panel = vscode.window.createWebviewPanel(
     'specsmithGovernance',
-    '⚙ Settings',
+    '⚙ Project Settings',
     vscode.ViewColumn.Beside,
     { enableScripts: true, retainContextWhenHidden: true },
   );
@@ -72,16 +71,6 @@ export function showGovernancePanel(
 function _reload(): void {
   if (!_panel || !_ctx || !_projectDir) { return; }
   _panel.webview.html = _html(_loadProjectData(_projectDir, _ctx));
-}
-
-/** Semver comparison: returns true if version a is strictly newer than b. */
-function _isNewerVersion(a: string, b: string): boolean {
-  const parse = (v: string) => v.split('.').map((n) => parseInt(n, 10) || 0);
-  const [aMaj, aMin, aPatch] = parse(a);
-  const [bMaj, bMin, bPatch] = parse(b);
-  if (aMaj !== bMaj) { return aMaj > bMaj; }
-  if (aMin !== bMin) { return aMin > bMin; }
-  return aPatch > bPatch;
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -107,26 +96,17 @@ interface AEEPhaseInfo {
 }
 interface ProjectData {
   projectDir: string; scaffold: ScaffoldData; govFiles: GovFile[];
-  installedVersion: string | null; availableVersion: string | null; lastUpdateCheck: string | null;
   phase: AEEPhaseInfo;
-  releaseChannel: string;  // 'stable' | 'pre-release'
-  venvVersion: string | null;  // specsmith version in .specsmith/venv, or null if no venv
 }
 interface GovMsg {
   command:
     | 'saveScaffold' | 'runCommand' | 'sendToAgent' | 'openFile' | 'refresh'
-    | 'addFile' | 'checkVersion' | 'installUpdate' | 'getSysInfo' | 'detectLanguages'
-    | 'phaseNext' | 'phaseSet'
-    | 'getOllamaModels' | 'ollamaRemoveModel' | 'ollamaUpdateModel' | 'ollamaUpdateAll'
-    | 'checkOllamaVersion' | 'ollamaUpgrade' | 'scanProject'
-    | 'saveExecution' | 'scanTools' | 'toolInstall'
-    | 'reloadWindow' | 'detectTools' | 'detectDisciplines' | 'setReleaseChannel'
-    | 'createVenv' | 'updateVenv' | 'deleteVenv' | 'rebuildVenv';
+    | 'addFile' | 'detectLanguages' | 'phaseNext' | 'phaseSet' | 'scanProject'
+    | 'saveExecution' | 'scanTools' | 'toolInstall' | 'detectTools' | 'detectDisciplines';
   scaffold?: ScaffoldData; cmd?: string; prompt?: string; file?: string; addType?: string;
-  phaseKey?: string; modelId?: string;
+  phaseKey?: string;
   profileName?: string; customAllowed?: string; customBlocked?: string; customBlockedTools?: string;
   toolKey?: string;
-  channel?: string;  // for setReleaseChannel
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -320,35 +300,8 @@ function _loadProjectData(projectDir: string, context: vscode.ExtensionContext):
     return [{ rel, label, exists, lines, addCmd: addType } as GovFile];
   });
 
-  // Prefer the venv version — that is what the bridge actually runs.
-  // Fall back to system specsmith only when no venv exists yet.
-  let installedVersion: string | null = getVenvSpecsmithVersion();
-  if (!installedVersion) {
-    try {
-      const exec = vscode.workspace.getConfiguration('specsmith').get<string>('executablePath', 'specsmith');
-      const resolved = findSpecsmith(exec, _ENV.PATH ?? '');
-      const r = cp.spawnSync(resolved, ['--version'], { timeout: 3000, encoding: 'utf8' });
-      if (r.status === 0) {
-        const m = (r.stdout ?? '').match(/(\d+\.\d+\.\d+(?:\.dev\d+|a\d+|b\d+|rc\d+)?)/);
-        installedVersion = m?.[1] ?? null;
-      }
-    } catch { /* ignore */ }
-  }
-
-  const avail     = context.globalState.get<string>('specsmith.availableVersion', '');
-  const checkMs   = context.globalState.get<number>('specsmith.lastVersionCheck', 0);
-  const lastCheck = checkMs ? new Date(checkMs).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : null;
-
-  // Read AEE phase from scaffold.yml
   const phase = _readPhase(projectDir);
-
-  // Release channel from VS Code settings
-  const releaseChannel = vscode.workspace.getConfiguration('specsmith').get<string>('releaseChannel', 'stable');
-
-  // Project-local venv version (null if no venv)
-  const venvVersion = getVenvSpecsmithVersion();
-
-  return { projectDir, scaffold, govFiles, installedVersion, availableVersion: avail || null, lastUpdateCheck: lastCheck, phase, releaseChannel, venvVersion };
+  return { projectDir, scaffold, govFiles, phase };
 }
 
 // ── Message handler ────────────────────────────────────────────────────────────
@@ -403,101 +356,6 @@ async function _handleMsg(msg: GovMsg): Promise<void> {
       _reload();
       break;
 
-    case 'checkVersion':
-      // Don't reload — webview JS updates via versionInfo message type without losing active tab
-      await _checkVersion(_ctx);
-      break;
-
-    case 'installUpdate': {
-      const channel = vscode.workspace.getConfiguration('specsmith').get<string>('releaseChannel', 'stable');
-      const isPre   = channel === 'pre-release';
-      // Use ; not || — PowerShell 5 does not support the || operator.
-      // Both commands run; if pipx succeeds pip is a no-op, and vice-versa.
-      const upgradeCmd = isPre
-        ? 'pipx install specsmith --pip-args="--pre" --force; pip install --pre --upgrade specsmith'
-        : 'pipx upgrade specsmith; pip install --upgrade specsmith';
-      const term = vscode.window.createTerminal({ name: 'specsmith upgrade', shellPath: _shellPath() });
-      term.sendText(upgradeCmd);
-      term.show();
-      // Tell webview to swap Install→Reload button so user can reload when done
-      _panel?.webview.postMessage({ type: 'installStarted' });
-      break;
-    }
-
-    case 'reloadWindow':
-      void vscode.commands.executeCommand('workbench.action.reloadWindow');
-      break;
-
-    case 'getSysInfo':
-      void _sendSysInfo();
-      break;
-
-    case 'getOllamaModels':
-      void _sendOllamaModels();
-      break;
-
-    case 'ollamaRemoveModel': {
-      if (!msg.modelId) { break; }
-      const exec = vscode.workspace.getConfiguration('specsmith').get<string>('executablePath', 'specsmith');
-      const term = vscode.window.createTerminal({ name: 'ollama remove', cwd: _projectDir });
-      term.sendText(`${exec} ollama remove "${msg.modelId}" --yes`);
-      term.show();
-      break;
-    }
-
-    case 'ollamaUpdateModel': {
-      if (!msg.modelId) { break; }
-      // Use 'ollama pull' directly — bypasses specsmith CLI for compatibility
-      const term2 = vscode.window.createTerminal({ name: 'ollama update' });
-      term2.sendText(`ollama pull "${msg.modelId}"`);
-      term2.show();
-      break;
-    }
-
-    case 'ollamaUpdateAll': {
-      // Bypass specsmith CLI — use 'ollama pull' directly so this works even
-      // with older installed specsmith versions that don't have the ollama group.
-      const { OllamaManager: _OM2 } = await import('./OllamaManager');
-      const installedIds = await _OM2.getInstalledIds();
-      if (!installedIds.length) {
-        void vscode.window.showInformationMessage('No Ollama models installed.');
-        break;
-      }
-      const term3 = vscode.window.createTerminal({ name: 'ollama update-all' });
-      term3.sendText(installedIds.map((m) => `ollama pull "${m}"`).join(' && '));
-      term3.show();
-      break;
-    }
-
-    case 'checkOllamaVersion':
-      void _checkOllamaVersion();
-      break;
-
-    case 'ollamaUpgrade': {
-      // Windows: try winget first; winget packages sometimes lag behind GitHub releases
-      // by a day or two, so if it reports no update we open the download page instead.
-      // macOS/Linux: standard package manager paths always have the latest.
-      let upgradeCmd: string;
-      if (process.platform === 'win32') {
-        // PowerShell: run winget, and if it exits non-zero (no update available) open browser.
-        upgradeCmd = [
-          'winget upgrade --id Ollama.Ollama',
-          "if ($LASTEXITCODE -ne 0) {",
-          "  Write-Host 'winget has no Ollama update yet (package may lag GitHub releases).';",
-          "  Write-Host 'Opening https://ollama.ai/download in your browser...';",
-          "  Start-Process 'https://ollama.ai/download'",
-          '}',
-        ].join(' ; ');
-      } else if (process.platform === 'darwin') {
-        upgradeCmd = 'brew upgrade ollama';
-      } else {
-        upgradeCmd = 'curl -fsSL https://ollama.ai/install.sh | sh';
-      }
-      const term4 = vscode.window.createTerminal({ name: 'ollama upgrade', shellPath: _shellPath() });
-      term4.sendText(upgradeCmd);
-      term4.show();
-      break;
-    }
 
     case 'scanProject':
       void _runScanProject();
@@ -517,100 +375,6 @@ async function _handleMsg(msg: GovMsg): Promise<void> {
       void _runDetectTools();
       break;
 
-    case 'createVenv': {
-      const ch2 = vscode.workspace.getConfiguration('specsmith').get<string>('releaseChannel', 'stable') as 'stable' | 'pre-release';
-      const { ApiKeyManager } = await import('./ApiKeyManager');
-      const providerPkgMap: Record<string, string> = {
-        anthropic: 'anthropic', openai: 'openai',
-        gemini: 'google-generativeai', mistral: 'mistralai',
-      };
-      const providers: string[] = [];
-      for (const [prov, pkg] of Object.entries(providerPkgMap)) {
-        const key = await ApiKeyManager.getKey(_ctx.secrets, prov);
-        if (key) { providers.push(pkg); }
-      }
-      const cmds = buildCreateVenvCommands(ch2, providers);
-      const term = vscode.window.createTerminal({ name: 'specsmith: create env', shellPath: _shellPath() });
-      term.sendText(cmds.join(' && '));
-      term.show();
-      void vscode.window.showInformationMessage(
-        `Creating specsmith environment (~/.specsmith/venv) in terminal. Reload VS Code when done.`,
-        'Reload Now',
-      ).then((a) => {
-        if (a === 'Reload Now') { void vscode.commands.executeCommand('workbench.action.reloadWindow'); }
-      });
-      break;
-    }
-
-    case 'updateVenv': {
-      const ch3 = vscode.workspace.getConfiguration('specsmith').get<string>('releaseChannel', 'stable') as 'stable' | 'pre-release';
-      const term2 = vscode.window.createTerminal({ name: 'specsmith: update env', shellPath: _shellPath() });
-      term2.sendText(buildUpdateVenvCommand(ch3));
-      term2.show();
-      _panel?.webview.postMessage({ type: 'installStarted' });
-      break;
-    }
-
-    case 'deleteVenv': {
-      const confirm = await vscode.window.showWarningMessage(
-        'Delete the global specsmith environment (~/.specsmith/venv)?  This will break all agent sessions until it is recreated.',
-        { modal: true },
-        'Delete',
-      );
-      if (confirm !== 'Delete') { break; }
-      const delCmds = buildDeleteVenvCommands();
-      const delTerm = vscode.window.createTerminal({ name: 'specsmith: delete env', shellPath: _shellPath() });
-      delTerm.sendText(delCmds.join(' ; '));
-      delTerm.show();
-      void vscode.window.showInformationMessage(
-        'Environment deleted. Reload VS Code to reflect the change.',
-        'Reload Now',
-      ).then((a) => {
-        if (a === 'Reload Now') { void vscode.commands.executeCommand('workbench.action.reloadWindow'); }
-      });
-      break;
-    }
-
-    case 'rebuildVenv': {
-      const confirmRb = await vscode.window.showWarningMessage(
-        'Rebuild the global specsmith environment?  This will delete ~/.specsmith/venv and reinstall specsmith from scratch.',
-        { modal: true },
-        'Rebuild',
-      );
-      if (confirmRb !== 'Rebuild') { break; }
-      const chRb = vscode.workspace.getConfiguration('specsmith').get<string>('releaseChannel', 'stable') as 'stable' | 'pre-release';
-      const { ApiKeyManager: AKM2 } = await import('./ApiKeyManager');
-      const providerPkgMapRb: Record<string, string> = {
-        anthropic: 'anthropic', openai: 'openai',
-        gemini: 'google-generativeai', mistral: 'mistralai',
-      };
-      const providersRb: string[] = [];
-      for (const [prov, pkg] of Object.entries(providerPkgMapRb)) {
-        const key = await AKM2.getKey(_ctx.secrets, prov);
-        if (key) { providersRb.push(pkg); }
-      }
-      const delCmdsRb  = buildDeleteVenvCommands();
-      const createCmds = buildCreateVenvCommands(chRb, providersRb);
-      const rbTerm = vscode.window.createTerminal({ name: 'specsmith: rebuild env', shellPath: _shellPath() });
-      rbTerm.sendText([...delCmdsRb, ...createCmds].join(' && '));
-      rbTerm.show();
-      void vscode.window.showInformationMessage(
-        'Rebuilding environment in terminal. Reload VS Code when done.',
-        'Reload Now',
-      ).then((a) => {
-        if (a === 'Reload Now') { void vscode.commands.executeCommand('workbench.action.reloadWindow'); }
-      });
-      break;
-    }
-
-    case 'setReleaseChannel': {
-      if (!msg.channel) { break; }
-      const cfg = vscode.workspace.getConfiguration('specsmith');
-      void cfg.update('releaseChannel', msg.channel, vscode.ConfigurationTarget.Global);
-      // Auto-refresh version check so pre-release versions show immediately
-      void _checkVersion(_ctx);
-      break;
-    }
 
     case 'detectDisciplines': {
       const suggestions = _suggestDisciplines(
@@ -656,198 +420,7 @@ async function _handleMsg(msg: GovMsg): Promise<void> {
   }
 }
 
-// ── Version helpers ────────────────────────────────────────────────────────────
-
-/** Parse a PEP 440 version to a numeric tuple for comparison.
- *  Returns [major, minor, patch, pre] where stable releases have pre=999999 (highest). */
-function _parseVer(v: string): [number, number, number, number] {
-  const m = v.match(/^(\d+)\.(\d+)\.(\d+)(?:\.dev(\d+)|a(\d+)|b(\d+)|rc(\d+))?/);
-  if (!m) { return [0, 0, 0, 0]; }
-  let pre = 999999;  // stable > all pre-releases
-  if (m[4] !== undefined)      { pre = parseInt(m[4], 10); }         // .devN (lowest)
-  else if (m[5] !== undefined) { pre = 10000 + parseInt(m[5], 10); } // aN
-  else if (m[6] !== undefined) { pre = 20000 + parseInt(m[6], 10); } // bN
-  else if (m[7] !== undefined) { pre = 30000 + parseInt(m[7], 10); } // rcN
-  return [parseInt(m[1], 10), parseInt(m[2], 10), parseInt(m[3], 10), pre];
-}
-
-/** Compare two PEP 440 version strings. Returns <0/0/>0 like Array.sort. */
-function _cmpVer(a: string, b: string): number {
-  const av = _parseVer(a), bv = _parseVer(b);
-  for (let i = 0; i < 4; i++) {
-    const d = av[i] - bv[i];
-    if (d !== 0) { return d; }
-  }
-  return 0;
-}
-
-// ── Version check ──────────────────────────────────────────────────────────────
-
-async function _checkVersion(context: vscode.ExtensionContext): Promise<void> {
-  const channel = vscode.workspace.getConfiguration('specsmith').get<string>('releaseChannel', 'stable');
-  await context.globalState.update('specsmith.lastVersionCheck', Date.now());
-  try {
-    const httpsM = await import('https');
-    const raw    = await new Promise<string>((resolve, reject) => {
-      const req = httpsM.get('https://pypi.org/pypi/specsmith/json', { timeout: 8000 }, (r) => {
-        let d = '';
-        r.on('data', (c: Buffer) => { d += c; });
-        r.on('end', () => resolve(d));
-      });
-      req.on('error', reject);
-      req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
-    });
-    const pypiData = JSON.parse(raw) as {
-      info?: { version?: string };
-      releases?: Record<string, Array<{ yanked?: boolean }>>;
-    };
-
-    let latest: string;
-    if (channel === 'pre-release') {
-      // Find the highest version across ALL releases (including devN / alpha / beta / rc)
-      const candidates = Object.entries(pypiData.releases ?? {})
-        .filter(([, files]) => files.length > 0 && !files.every(f => f.yanked))
-        .map(([v]) => v);
-      candidates.sort(_cmpVer);
-      latest = candidates[candidates.length - 1] ?? pypiData.info?.version ?? '';
-    } else {
-      // Stable channel: use the latest stable version from PyPI info
-      latest = pypiData.info?.version ?? '';
-    }
-
-    await context.globalState.update('specsmith.availableVersion', latest);
-    _panel?.webview.postMessage({ type: 'versionInfo', available: latest });
-  } catch (err) {
-    _panel?.webview.postMessage({ type: 'versionInfo', error: String(err) });
-  }
-}
-
-// ── System info ────────────────────────────────────────────────────────────────
-
-async function _sendSysInfo(): Promise<void> {
-  if (!_panel) { return; }
-  const GB = 1073741824;
-  const info: Record<string, string> = {
-    os:    `${os.type()} ${os.release()} (${os.arch()})`,
-    cpu:   os.cpus()[0]?.model ?? 'Unknown',
-    cores: String(os.cpus().length),
-    ram:   `${(os.totalmem() / GB).toFixed(1)} GB total, ${(os.freemem() / GB).toFixed(1)} GB free`,
-  };
-
-  // GPU detection
-  try {
-    const r = cp.spawnSync('nvidia-smi', ['--query-gpu=name,memory.total', '--format=csv,noheader'], { timeout: 4000, encoding: 'utf8' });
-    if (r.status === 0 && r.stdout.trim()) { info.gpu = r.stdout.trim().split('\n')[0]; }
-  } catch { /* no nvidia */ }
-
-  if (!info.gpu && process.platform === 'win32') {
-    try {
-      const r = cp.spawnSync('powershell', ['-NoProfile', '-Command',
-        'Get-WmiObject Win32_VideoController | Select-Object -First 1 Name,AdapterRAM | ForEach-Object { "$($_.Name) ($([math]::Round($_.AdapterRAM/1GB,1))GB)" }',
-      ], { timeout: 6000, encoding: 'utf8' });
-      if (r.status === 0 && r.stdout.trim()) { info.gpu = r.stdout.trim(); }
-    } catch { /* no wmi */ }
-  }
-  if (!info.gpu) { info.gpu = 'Not detected'; }
-
-  // Disk
-  try {
-    if (process.platform === 'win32') {
-      const r = cp.spawnSync('wmic', ['logicaldisk', 'get', 'caption,freespace,size', '/format:csv'], { timeout: 4000, encoding: 'utf8' });
-      if (r.status === 0) {
-        info.disk = r.stdout.trim().split('\n').slice(1)
-          .filter(l => l.trim() && !l.startsWith('Node'))
-          .map(row => {
-            const [, caption, free, size] = row.split(',');
-            if (!caption || !size) { return ''; }
-            return `${caption.trim()} ${(Number(free) / GB).toFixed(1)}/${(Number(size) / GB).toFixed(1)} GB`;
-          }).filter(Boolean).join('  ') || 'N/A';
-      }
-    } else {
-      const r = cp.spawnSync('df', ['-h', '-P', '/'], { timeout: 3000, encoding: 'utf8' });
-      if (r.status === 0) { const p = r.stdout.split('\n')[1]?.split(/\s+/) ?? []; if (p[3]) { info.disk = `${p[0]}: ${p[3]} free / ${p[1]}`; } }
-    }
-  } catch { /* ignore */ }
-  if (!info.disk) { info.disk = 'N/A'; }
-
-  _panel.webview.postMessage({ type: 'sysInfo', info });
-}
-
-// ── Ollama model list ──────────────────────────────────────────────────
-
-async function _sendOllamaModels(): Promise<void> {
-  if (!_panel) { return; }
-  try {
-    const { OllamaManager } = await import('./OllamaManager');
-    const detail = await OllamaManager.getInstalledIds();
-    // Try to get richer detail via the API
-    const http = await import('http');
-    const models = await new Promise<Array<{ name: string; size: number; modified_at: string }>>(
-      (resolve) => {
-        let data = '';
-        http.get('http://localhost:11434/api/tags', (r) => {
-          r.on('data', (c: Buffer) => { data += c.toString(); });
-          r.on('end', () => {
-            try {
-              const j = JSON.parse(data) as { models?: Array<{ name: string; size: number; modified_at: string }> };
-              resolve(j.models ?? []);
-            } catch { resolve([]); }
-          });
-        }).on('error', () => resolve(detail.map((n) => ({ name: n, size: 0, modified_at: '' }))));
-      },
-    );
-    _panel.webview.postMessage({ type: 'ollamaModels', models });
-  } catch {
-    _panel.webview.postMessage({ type: 'ollamaModels', models: [] });
-  }
-}
-
-// ── Ollama version check ────────────────────────────────────────────
-
-async function _checkOllamaVersion(): Promise<void> {
-  if (!_panel) { return; }
-  // Get local version from Ollama API
-  let installed: string | null = null;
-  try {
-    const http = await import('http');
-    installed = await new Promise<string | null>((resolve) => {
-      let d = '';
-      http.get('http://localhost:11434/api/version', (r) => {
-        r.on('data', (c: Buffer) => { d += c.toString(); });
-        r.on('end', () => {
-          try { resolve((JSON.parse(d) as { version?: string }).version ?? null); }
-          catch { resolve(null); }
-        });
-      }).on('error', () => resolve(null));
-    });
-  } catch { /* ignore */ }
-
-  // Get latest from GitHub releases
-  let latest: string | null = null;
-  try {
-    const httpsM = await import('https');
-    latest = await new Promise<string | null>((resolve, reject) => {
-      const req = httpsM.get(
-        'https://api.github.com/repos/ollama/ollama/releases/latest',
-        { headers: { 'Accept': 'application/vnd.github+json', 'User-Agent': 'specsmith-vscode' } },
-        (r) => {
-          let d = '';
-          r.on('data', (c: Buffer) => { d += c; });
-          r.on('end', () => {
-            try {
-              const tag = (JSON.parse(d) as { tag_name?: string }).tag_name ?? '';
-              resolve(tag.replace(/^v/, '') || null);
-            } catch { resolve(null); }
-          });
-        },
-      );
-      req.on('error', reject);
-      req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
-    });
-  } catch { /* ignore */ }
-
-  _panel.webview.postMessage({ type: 'ollamaVersionInfo', installed, latest });
-}
+// ── (version/system/ollama helpers moved to SettingsPanel.ts) ─────────────────
 
 // ── Project scanner ───────────────────────────────────────────────
 
@@ -1199,15 +772,10 @@ function _readPhase(projectDir: string): AEEPhaseInfo {
 
 function _html(data: ProjectData): string {
   const s     = data.scaffold;
-  const activeChannel = data.releaseChannel ?? 'stable';
-  const ood   = s.spec_version && data.installedVersion && s.spec_version < data.installedVersion;
-  // Only show 'update available' when PyPI version is STRICTLY NEWER than installed.
-  // Use _cmpVer (PEP 440-aware) instead of _isNewerVersion which only checks MAJOR.MINOR.PATCH
-  // and incorrectly treats 0.3.6.dev176 == 0.3.6.
-  const upd = data.availableVersion && data.installedVersion
-    && _cmpVer(data.availableVersion, data.installedVersion) > 0;
+  const ood   = false; // spec_version check removed (version info moved to Settings panel)
 
-  const selL = s.languages ?? [], selI = s.integrations ?? [], selP = s.platforms ?? [],
+  const selL = s.languages ?? [],
+        selP = s.platforms ?? [],
         selF = s.fpga_tools ?? [], selAux = s.auxiliary_disciplines ?? [];
 
   // Grouped project type options with human-readable labels
@@ -1336,7 +904,7 @@ function _html(data: ProjectData): string {
 </style></head>
 <body>
 <div class="topbar">
-    <span class="title">⚙ Settings</span>
+    <span class="title">⚙ Project Settings</span>
   <div style="display:flex;gap:5px">
     <button class="btn-sm" title="Reload panel" onclick="refresh()">↺ Refresh</button>
     <button class="btn-sm" title="Start agent session" onclick="sendToAgent('Run the session start protocol: sync, load AGENTS.md, check LEDGER.md.')">🤖 Agent</button>
@@ -1357,15 +925,12 @@ ${(() => {
   <select class="phase-sel" onchange="phaseSet(this.value)">${phaseOpts}</select>
 </div>`;
   })()}
-${ood ? `<div class="warn-banner">⚠ scaffold.yml spec_version <b>${s.spec_version}</b> older than installed <b>${data.installedVersion}</b> — <button class="tb" onclick="runCmd('upgrade')">↑ upgrade spec</button></div>` : ''}
-${upd ? `<div class="upd-banner">⬆ specsmith <b>${data.availableVersion}</b> available (installed <b>${data.installedVersion}</b>) — <button class="tb" style="border-color:var(--teal);color:var(--teal)" onclick="sw('updates')">View Update</button></div>` : ''}
 <div class="tab-bar">
-  <button class="tab active" onclick="sw('project')">📁 Project</button>
-  <button class="tab" onclick="sw('tools')">🔧 Tools</button>
-  <button class="tab" onclick="sw('files')">📋 Files</button>
-  <button class="tab" onclick="sw('updates')">🆙 Updates${upd ? '<span class="badge">NEW</span>' : ''}</button>
-  <button class="tab" onclick="sw('actions')">⚡ Actions</button>
-  <button class="tab" onclick="sw('execution')">🛡 Execution</button>
+  <button class="tab active" onclick="sw('project')">&#x1f4c1; Project</button>
+  <button class="tab" onclick="sw('tools')">&#x1f527; Tools</button>
+  <button class="tab" onclick="sw('files')">&#x1f4cb; Files</button>
+  <button class="tab" onclick="sw('actions')">&#x26a1; Actions</button>
+  <button class="tab" onclick="sw('execution')">&#x1f6e1; Execution</button>
 </div>
 <div class="scroll">
 
@@ -1408,16 +973,8 @@ ${upd ? `<div class="upd-banner">⬆ specsmith <b>${data.availableVersion}</b> a
 </div>
 <h3 title="Platforms this project is built/tested for in CI/CD — not the host OS running VS Code">CI/CD Build Platforms</h3>
 <div class="chips">${chips(PLATFORMS, selP, 'platform')}</div>
-<h3 style="margin-top:12px">🗂 Installed Ollama Models</h3>
-<div id="ollama-mdl-load" class="dim" style="margin:4px 0">Click Refresh to load installed models</div>
-<table id="ollama-mdl-table" style="display:none;font-size:11px">
-  <thead><tr><td><b>Model</b></td><td class="dim">Size</td><td></td></tr></thead>
-  <tbody id="ollama-mdl-body"></tbody>
-</table>
 <div class="btn-row">
-  <button class="btn" onclick="save()">💾 Save</button>
-  <button class="btn-sm" onclick="loadOllamaModels()">↺ Refresh Models</button>
-  <button class="btn-sm" onclick="ollamaUpdateAll()">⬆ Update All Models</button>
+  <button class="btn" onclick="save()">&#x1f4be; Save</button>
 </div>
 </div>
 
@@ -1430,53 +987,6 @@ ${upd ? `<div class="upd-banner">⬆ specsmith <b>${data.availableVersion}</b> a
 </table>
 </div>
 
-<!-- Updates tab -->
-<div id="t-updates" class="tab-pane">
-<h3>specsmith Version</h3>
-<div class="ver-grid">
-<span class="ver-lbl">Installed</span><span class="ver-val" id="ver-installed">${data.installedVersion ?? '—'}</span>
-  <span class="ver-lbl">Available</span><span class="ver-val" id="ver-avail">${data.availableVersion ?? '(not checked)'}</span>
-  <span class="ver-lbl">Last check</span><span class="ver-lbl" id="last-check">${data.lastUpdateCheck ?? 'never'}</span>
-  <span class="ver-lbl">Channel</span>
-  <select id="release-ch" onchange="saveReleaseChannel(this.value)" style="width:auto;background:var(--ib);color:var(--if);border:1px solid var(--br);border-radius:3px;padding:2px 5px;font-size:11px;font-family:var(--fn)">
-    <option value="stable"${activeChannel === 'stable' ? ' selected' : ''}>stable (recommended)</option>
-    <option value="pre-release"${activeChannel === 'pre-release' ? ' selected' : ''}>pre-release (dev builds)</option>
-  </select>
-</div>
-<div class="btn-row">
-  <button class="btn" id="chk-btn" onclick="chkVer()">🔍 Check for Updates</button>
-  ${upd ? '<button class="btn btn-upd" onclick="installUpd()">⬆ Install Update</button>' : ''}
-</div>
-<h3 style="margin-top:16px">specsmith Environment (~/.specsmith/venv)</h3>
-<div class="info-box" style="font-size:11px">A global specsmith environment isolates the agent from system PATH and ensures all projects use the same version. All agent sessions and terminal commands use it automatically. Required — sessions cannot start without it.</div>
-<div class="ver-grid">
-  <span class="ver-lbl">Status</span>
-  <span class="ver-val" style="color:${data.venvVersion ? 'var(--grn)' : 'var(--red)'}">${data.venvVersion ? '\u2713 Active' : '\u2717 Not installed'}</span>
-  ${data.venvVersion ? `<span class="ver-lbl">Version</span><span class="ver-val">${data.venvVersion}</span>` : ''}
-  <span class="ver-lbl">Location</span><span class="ver-lbl" title="Global specsmith environment">~/.specsmith/venv/</span>
-</div>
-<div class="btn-row" style="margin-bottom:14px">
-  ${data.venvVersion
-    ? `<button class="btn-sm" onclick="updateVenv()">\u2b06 Update</button>
-       <button class="btn-sm" onclick="rebuildVenv()" title="Delete and recreate the project environment from scratch">\uD83D\uDD04 Rebuild</button>
-       <button class="btn-sm" style="color:var(--red);border-color:var(--red)" onclick="deleteVenv()" title="Remove .specsmith/venv">\uD83D\uDDD1 Delete</button>`
-    : `<button class="btn btn-upd" onclick="createVenv()">\uD83D\uDD12 Create Project Environment</button>`
-  }
-</div>
-<h3 style="margin-top:4px">Ollama</h3>
-<div class="ver-grid">
-  <span class="ver-lbl">Installed</span><span class="ver-val" id="ollama-ver">—</span>
-  <span class="ver-lbl">Available</span><span class="ver-val" id="ollama-latest">—</span>
-</div>
-<div class="btn-row" style="margin-bottom:12px">
-  <button class="btn" id="ollama-chk-btn" onclick="chkOllamaVer()">🔍 Check Ollama</button>
-  <button class="btn-sm" onclick="ollamaUpgrade()">⬆ Upgrade Ollama</button>
-</div>
-<h3 style="margin-top:4px">System Info</h3>
-<div id="sys-load" class="dim">Loading…</div>
-<div id="sys-grid" class="sys-grid" style="display:none"></div>
-<div style="margin-top:8px"><button class="btn-sm" onclick="getSys()">↺ Refresh</button></div>
-</div>
 
 <!-- Execution tab -->
 ${(() => {
@@ -1551,16 +1061,13 @@ ${prompts}
 
 <script>
 const vscode=acquireVsCodeApi();
-// Installed version embedded at page-load — more reliable than DOM scraping later.
-const INST_VER=${JSON.stringify(data.installedVersion ?? '')};
 const LANGUAGES=${JSON.stringify(LANGUAGES)};
 const FPGA_TOOLS=${JSON.stringify(FPGA_TOOLS)};
 
 function sw(id){
-  const tabs=['project','tools','files','updates','actions','execution'];
+  const tabs=['project','tools','files','actions','execution'];
   document.querySelectorAll('.tab').forEach((t,i)=>t.classList.toggle('active',tabs[i]===id));
   document.querySelectorAll('.tab-pane').forEach(p=>p.classList.toggle('active',p.id==='t-'+id));
-  if(id==='updates')getSys();
   if(id==='execution')scanToolsNow();
 }
 function execProfileChanged(){
@@ -1590,7 +1097,6 @@ function installTool(key){vscode.postMessage({command:'toolInstall',toolKey:key}
 function detectToolsNow(){
   vscode.postMessage({command:'detectTools'});
 }
-function saveReleaseChannel(ch){vscode.postMessage({command:'setReleaseChannel',channel:ch});}
 function suggestDisciplines(){
   const type=document.getElementById('type')?.value||'';
   const langs=[...document.querySelectorAll('input[name=language]:checked')].map(e=>e.value);
@@ -1602,21 +1108,6 @@ function sendToAgent(p){vscode.postMessage({command:'sendToAgent',prompt:p})}
 function openFile(f){vscode.postMessage({command:'openFile',file:f})}
 function addFile(t){vscode.postMessage({command:'addFile',addType:t})}
 function detectLang(){vscode.postMessage({command:'detectLanguages'})}
-function chkVer(){
-  const btn=document.getElementById('chk-btn');
-  btn.textContent='⌛ Checking…';btn.disabled=true;
-  vscode.postMessage({command:'checkVersion'});
-}
-function installUpd(){
-  const btn=document.querySelector('.btn-upd');
-  if(btn){btn.textContent='Installing…';btn.disabled=true;}
-  vscode.postMessage({command:'installUpdate'});
-}
-function getSys(){
-  document.getElementById('sys-load').style.display='';
-  document.getElementById('sys-grid').style.display='none';
-  vscode.postMessage({command:'getSysInfo'});
-}
 function save(){
   vscode.postMessage({command:'saveScaffold',scaffold:{
     name:document.getElementById('name').value,
@@ -1631,22 +1122,6 @@ function save(){
   }});
 }
 function scanProj(){vscode.postMessage({command:'scanProject'})}
-function loadOllamaModels(){
-  document.getElementById('ollama-mdl-load').style.display='';
-  document.getElementById('ollama-mdl-load').textContent='Loading…';
-  document.getElementById('ollama-mdl-table').style.display='none';
-  vscode.postMessage({command:'getOllamaModels'});
-}
-function ollamaUpdateAll(){vscode.postMessage({command:'ollamaUpdateAll'})}
-function chkOllamaVer(){
-  document.getElementById('ollama-chk-btn').textContent='⌛…';
-  vscode.postMessage({command:'checkOllamaVersion'});
-}
-function ollamaUpgrade(){vscode.postMessage({command:'ollamaUpgrade'})}
-function createVenv(){vscode.postMessage({command:'createVenv'})}
-function updateVenv(){vscode.postMessage({command:'updateVenv'})}
-function deleteVenv(){vscode.postMessage({command:'deleteVenv'})}
-function rebuildVenv(){vscode.postMessage({command:'rebuildVenv'})}
 function filt(inp,name){
   const q=inp.value.toLowerCase();
   document.querySelectorAll('input[name='+name+']').forEach(cb=>{
@@ -1659,92 +1134,6 @@ document.querySelectorAll('.chip').forEach(c=>{
   c.addEventListener('click',()=>c.classList.toggle('sel',c.querySelector('input').checked));
 });
 window.addEventListener('message',({data})=>{
-    if(data.type==='versionInfo'){
-    const btn=document.getElementById('chk-btn');
-    btn.textContent='🔍 Check for Updates';btn.disabled=false;
-    if(data.error){document.getElementById('ver-avail').textContent='Error — try again';}
-    else if(data.available){
-      document.getElementById('ver-avail').textContent=data.available;
-      document.getElementById('last-check').textContent=new Date().toLocaleString([],{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
-      // Use INST_VER embedded at page-load — avoids fragile DOM querySelector that
-      // could pick up the wrong .ver-val element after the venv section was added.
-      const installed=INST_VER||document.getElementById('ver-installed')?.textContent?.trim()||'';
-      function semverGt(a,b){
-        function parseVer(v){
-          const m=v.match(/^(\d+)\.(\d+)\.(\d+)(?:\.(dev)(\d+)|a(\d+)|b(\d+)|rc(\d+))?/);
-          if(!m)return[0,0,0,0];
-          let pre=999999;
-          if(m[4]!==undefined&&m[5]!==undefined)pre=parseInt(m[5])||0;          // .devN
-          else if(m[6]!==undefined)pre=10000+(parseInt(m[6])||0);               // aN
-          else if(m[7]!==undefined)pre=20000+(parseInt(m[7])||0);               // bN
-          else if(m[8]!==undefined)pre=30000+(parseInt(m[8])||0);               // rcN
-          return[parseInt(m[1])||0,parseInt(m[2])||0,parseInt(m[3])||0,pre];
-        }
-        const av=parseVer(a),bv=parseVer(b);
-        for(let i=0;i<4;i++){if(av[i]>bv[i])return true;if(av[i]<bv[i])return false;}
-        return false;
-      }
-      if(installed&&semverGt(data.available,installed)){
-        const row=btn.closest('.btn-row');
-        if(row&&!row.querySelector('.btn-upd')){
-          const upd=document.createElement('button');
-          upd.className='btn btn-upd';upd.textContent='⬆ Install Update';
-          upd.onclick=()=>vscode.postMessage({command:'installUpdate'});
-          row.appendChild(upd);
-        }
-      } else if(installed) {
-        // Show 'up to date or newer' message
-        const avEl=document.getElementById('ver-avail');
-        if(avEl)avEl.textContent=data.available+' ✓ (installed version is current)';
-      }
-    }
-  }
-  if(data.type==='sysInfo'){
-    const g=document.getElementById('sys-grid');
-    const labels={os:'OS',cpu:'CPU',cores:'Cores',ram:'RAM',gpu:'GPU',disk:'Disk'};
-    g.innerHTML=Object.entries(labels).filter(([k])=>data.info[k])
-      .map(([k,l])=>\`<span class="sys-lbl">\${l}</span><span class="sys-val">\${data.info[k]}</span>\`).join('');
-    document.getElementById('sys-load').style.display='none';
-    g.style.display='grid';
-  }
-  if(data.type==='ollamaModels'){
-    const tbody=document.getElementById('ollama-mdl-body');
-    const load=document.getElementById('ollama-mdl-load');
-    const tbl=document.getElementById('ollama-mdl-table');
-    tbody.innerHTML=(data.models||[]).map(m=>{
-      const gb=(m.size>0?(m.size/1073741824).toFixed(1)+'GB':'');
-      const mod=(m.modified_at||'').slice(0,10);
-      return \`<tr><td>\${m.name}</td><td class="dim">\${gb}\${mod?' ['+mod+']':''}</td>
-        <td style="display:flex;gap:3px">
-          <button class="tb" onclick="vscode.postMessage({command:'ollamaUpdateModel',modelId:'\${m.name}'})">\u2b06 Update</button>
-          <button class="tb" style="color:var(--red)" onclick="vscode.postMessage({command:'ollamaRemoveModel',modelId:'\${m.name}'})">\u2717 Remove</button>
-        </td></tr>\`;
-    }).join('');
-    load.style.display='none';
-    tbl.style.display=data.models&&data.models.length?'':'none';
-    if(!data.models||!data.models.length){load.textContent='No models installed';load.style.display='';}
-  }
-  if(data.type==='installStarted'){
-    // Upgrade terminal opened — swap Install button to Reload
-    const row=document.getElementById('chk-btn')?.closest('.btn-row');
-    if(row){
-      const old=row.querySelector('.btn-upd,button[disabled]');
-      if(old)old.remove();
-      const rel=document.createElement('button');
-      rel.className='btn btn-rel';rel.textContent='↺ Reload Window';
-      rel.onclick=()=>vscode.postMessage({command:'reloadWindow'});
-      row.appendChild(rel);
-    }
-  }
-  if(data.type==='ollamaVersionInfo'){
-    document.getElementById('ollama-chk-btn').textContent='🔍 Check Ollama';
-    document.getElementById('ollama-ver').textContent=data.installed||'(not running)';
-    document.getElementById('ollama-latest').textContent=data.latest
-      ? (data.installed&&data.latest!==data.installed
-        ? data.latest+' ← update available'
-        : data.latest+' ✓ up to date')
-      : '(could not check)';
-  }
   if(data.type==='toolsScanResult'){
     const load=document.getElementById('tools-scan-load');
     const tbody=document.getElementById('tools-scan-body');

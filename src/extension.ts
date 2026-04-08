@@ -14,6 +14,7 @@ import { EpistemicBar } from './EpistemicBar';
 import { ApiKeyManager } from './ApiKeyManager';
 import { showHelp } from './HelpPanel';
 import { showGovernancePanel, closeGovernancePanel } from './GovernancePanel';
+import { showSettingsPanel, closeSettingsPanel } from './SettingsPanel';
 import { fetchModels } from './ModelRegistry';
 import { OllamaManager, TASK_SUGGESTIONS } from './OllamaManager';
 import { SessionStatus } from './types';
@@ -43,9 +44,10 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     onSessionStatusChange((_panel: SessionPanel, status: SessionStatus) => {
       sessionTree.refresh();
-      // Close Settings panel when the last session is disposed
+      // Close both panels when the last session is disposed
       if (status === 'inactive' && SessionPanel.all().length === 0) {
         closeGovernancePanel();
+        closeSettingsPanel();
       }
     }),
   );
@@ -82,7 +84,8 @@ export function activate(context: vscode.ExtensionContext): void {
     await SessionPanel.create(context, projectDir, provider, d.model);
     sessionTree.refresh();
     projectTree.addProject(projectDir);
-    // Always open the Settings panel alongside the session so there's never a blank pane
+    // Open global Settings + Project Settings alongside the session
+    showSettingsPanel(context);
     showGovernancePanel(
       context,
       projectDir,
@@ -825,6 +828,12 @@ export function activate(context: vscode.ExtensionContext): void {
   // ── Commands: Settings panel ─────────────────────────────────────
 
   context.subscriptions.push(
+    vscode.commands.registerCommand('specsmith.showSettings', () => {
+      showSettingsPanel(context);
+    }),
+  );
+
+  context.subscriptions.push(
     vscode.commands.registerCommand('specsmith.showGovernance', () => {
       const session    = SessionPanel.current();
       const projectDir = session?.projectDir
@@ -1045,6 +1054,7 @@ async function _autoOpenGovernancePanel(
   // Focus the specsmith sidebar first so the user sees it
   void vscode.commands.executeCommand('workbench.view.extension.specsmith');
 
+  showSettingsPanel(context);
   showGovernancePanel(
     context,
     workspaceDir,
