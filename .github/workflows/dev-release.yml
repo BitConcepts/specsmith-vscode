@@ -1,0 +1,70 @@
+name: Dev Release
+
+on:
+  push:
+    branches: [develop]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build VSIX & publish pre-release
+    runs-on: ubuntu-latest
+    # Only run from the develop branch — blocks accidental workflow_dispatch from main.
+    if: github.ref == 'refs/heads/develop'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: TypeScript type check
+        run: npm run lint
+
+      - name: esbuild bundle
+        run: npm run build
+
+      - name: Install vsce
+        run: npm install -g @vscode/vsce
+
+      - name: Package VSIX
+        run: vsce package --no-dependencies
+
+      - name: Upload VSIX artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: specsmith-vscode-vsix
+          path: "*.vsix"
+          retention-days: 30
+
+      - name: Publish GitHub pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          VSIX_FILE=$(ls *.vsix | head -1)
+          TAG="v${VERSION}-dev.$(git rev-list --count HEAD)"
+
+          echo "Publishing pre-release ${TAG} with ${VSIX_FILE}"
+
+          # Delete existing pre-release with same tag if it exists
+          gh release delete "${TAG}" --yes 2>/dev/null || true
+          git push origin --delete "${TAG}" 2>/dev/null || true
+
+          gh release create "${TAG}" "${VSIX_FILE}" \
+            --title "specsmith-vscode ${TAG}" \
+            --notes "Development pre-release built from \`develop\` branch.
+          Commit: ${{ github.sha }}
+
+          ## Install
+          Download the \`.vsix\` file and install in VS Code:
+          \`Ctrl+Shift+P → Extensions: Install from VSIX\`" \
+            --prerelease
