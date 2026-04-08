@@ -697,15 +697,18 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.commands.registerCommand(
       'specsmith.reportBug',
-      (prefillTitle?: string, prefillDetail?: string) => {
+      (prefillTitle?: string, prefillDetail?: string, targetRepo?: string) => {
         const version = _probeVersion(
           vscode.workspace.getConfiguration('specsmith').get<string>('executablePath', 'specsmith') ?? 'specsmith',
         ) ?? undefined;
-        void promptAndReportBug({
-          prefillTitle:   prefillTitle,
-          prefillDetail:  prefillDetail,
-          specsmithVersion: version,
-        });
+        if (prefillTitle && prefillDetail && targetRepo) {
+          // Called from webview crash card with pre-collected diagnostics——go straight to reportBug (still shows consent modal).
+          void import('./BugReporter').then(({ reportBug }) =>
+            reportBug({ title: prefillTitle, summary: prefillDetail.split('\n')[0], detail: prefillDetail, specsmithVersion: version }, false, targetRepo),
+          );
+        } else {
+          void promptAndReportBug({ prefillTitle, prefillDetail, specsmithVersion: version });
+        }
       },
     ),
   );

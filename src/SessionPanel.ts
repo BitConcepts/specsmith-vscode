@@ -429,13 +429,17 @@ export class SessionPanel implements vscode.Disposable {
         void vscode.commands.executeCommand('specsmith.showHelp');
         break;
 
-      case 'reportBug':
+      case 'reportBug': {
+        // Determine target repo from prefilled title prefix
+        const repo = msg.bugTitle?.startsWith('[specsmith]') ? 'specsmith' : 'specsmith-vscode';
         void vscode.commands.executeCommand(
           'specsmith.reportBug',
-          msg.bugTitle ?? 'specsmith-vscode bug',
+          msg.bugTitle ?? 'specsmith bug',
           msg.bugDetail ?? '',
+          repo,
         );
         break;
+      }
     }
   }
 
@@ -720,22 +724,88 @@ function extractErrSummary(r){
   const lines=r.split('\\n').map(l=>l.trim()).filter(l=>l&&!l.startsWith('#'));
   return lines[0]?.slice(0,150)||r.slice(0,150);
 }
+/* Human-readable tool name labels */
+const _TLBL={audit:'Governance audit',validate:'Consistency check',doctor:'Tool check',
+  epistemic_audit:'Epistemic audit',stress_test:'Stress test',belief_graph:'Belief graph',
+  diff:'Drift check',export:'Compliance report',commit:'Commit',push:'Push',sync:'Sync',
+  ledger_add:'Ledger entry',ledger_list:'Ledger list',read_file:'Reading file',
+  write_file:'Writing file',list_dir:'Listing files',run_command:'Running command',
+  req_list:'Requirements',req_gaps:'Coverage gaps',req_trace:'Traceability',
+  read_wireframe:'Wireframe',retrieve_context:'Searching index',session_end:'Session end'};
+function _tname(n){return _TLBL[n]||n}
+/* Tool started: compact inline status */
+function addTStart(n,args){
+  const d=document.createElement('div');d.className='sl';
+  const lbl=_tname(n);
+  const hint=args&&args.fix==='true'?' (auto-fix)':args&&args.path?' — '+String(args.path).split(/[\\/]/).pop():'';
+  d.innerHTML=\`<span style="color:var(--teal)">⏳ \${esc(lbl)}\${esc(hint)}…</span><span class="mts">\${ts()}</span>\`;
+  C.appendChild(d);sb2()}
 function addT(n,r,e){
   // Treat [exit N] (non-zero subprocess exit) as an error for expandable display
   if(!e&&r&&/^\\[exit [1-9]/.test(r))e=true;
+  const lbl=_tname(n);
   const d=document.createElement('div');d.className='tb'+(e?' er':'');
-  if(e&&r&&r.length>100){
-    // Collapsible error with smart summary
+  if(e&&r&&r.length>80){
     const summary=extractErrSummary(r);
-    d.innerHTML=\`<div class="thdr">❌ \${esc(n)}</div>
+    d.innerHTML=\`<div class="thdr">❌ \${esc(lbl)}</div>
       <details><summary class="tres" style="cursor:pointer;list-style:none">
-        \${esc(summary)}<span class="dim" style="font-size:9px;margin-left:4px">(click for details)</span>
+        \${esc(summary)}<span style="font-size:9px;margin-left:4px;opacity:.6">(click for details)</span>
       </summary><pre class="err-detail" style="margin-top:4px;font-size:10px">\${esc(r.slice(0,3000))}\${r.length>3000?'\\n…(truncated)':''}</pre></details>\`;
+  }else if(e){
+    d.innerHTML=\`<div class="thdr">❌ \${esc(lbl)}</div><div class="tres">\${esc((r||'').slice(0,200))}</div>\`;
   }else{
-    d.innerHTML=\`<div class="thdr">\${e?'❌':'✅'} \${esc(n)}</div>
-      <div class="tres">\${esc((r||'').slice(0,500))}\${(r||'').length>500?'<em>…</em>':''}</div>\`;
+    // Success: one-line compact pill — no raw dump, just a status tick
+    const brief=_toolBrief(n,r||'');
+    d.innerHTML=\`<div class="thdr" style="color:var(--teal)">✓ \${esc(lbl)} — \${esc(brief)}</div>\`;
   }
   C.appendChild(d);sb2()}
+/* Parse a one-line human summary from tool output */
+function _toolBrief(n,r){
+  if(!r||r==='(no output)')return'done';
+  if(n==='audit'||n==='validate'){const m=r.match(/(\\d+) (issue|check)/i);return m?m[0]:'done'}
+  if(n==='doctor'){const m=r.match(/(\\d+) tool/i);return m?m[0]:'done'}
+  const first=r.split('\\n').find(l=>l.trim()&&!l.startsWith('['));
+  return(first||'done').trim().slice(0,60);}
+/* Crash card: critical unexpected error — stop, show diagnostic, ask to report */
+function addToolCrash(data){
+  const repo=data.repo||'specsmith';
+  const repoLabel=repo==='specsmith'?'specsmith CLI':'specsmith-vscode extension';
+  const title=\`[\${repo}] \${data.tool||'tool'} crashed: \${(data.summary||'unexpected error').slice(0,80)}\`;
+  const detail=[
+    'Tool: '+esc(data.tool||'?'),
+    'Error: '+esc(data.summary||'?'),
+    'specsmith: '+esc(data.specsmith_version||'?'),
+    'Python: '+esc(data.python_version||'?'),
+    'OS: '+esc(data.os_info||'?'),
+    data.project_type?'Project type: '+esc(data.project_type):'',
+  ].filter(Boolean).join(' | ');
+  const fullDetail=[
+    '**Tool:** '+esc(data.tool||'?'),
+    '**Error:** '+esc(data.summary||'?'),
+    '**specsmith version:** '+esc(data.specsmith_version||'unknown'),
+    '**Python:** '+esc(data.python_version||'?'),
+    '**OS:** '+esc(data.os_info||'?'),
+    data.project_type?'**Project type:** '+esc(data.project_type):'',
+    data.detail?'\\n**Error detail:**\\n'+(data.detail||'').slice(0,3000):'',
+  ].filter(Boolean).join('\\n');
+  const d=document.createElement('div');
+  d.style.cssText='background:rgba(244,71,71,.1);border:1px solid var(--red);border-left:4px solid var(--red);border-radius:6px;padding:10px 14px;margin:4px 0;';
+  d.innerHTML=\`
+    <div style="font-weight:600;color:var(--red);margin-bottom:6px">🚨 Something went wrong in the \${esc(repoLabel)}</div>
+    <div style="font-size:12px;color:var(--fg);margin-bottom:2px"><strong>\${esc(data.tool||'?')}</strong> crashed: \${esc(data.summary||'unexpected error')}</div>
+    <div style="font-size:11px;color:var(--dim);margin-bottom:8px">\${esc(detail)}</div>
+    <div style="font-size:11px;color:var(--dim);margin-bottom:8px">The session has stopped. This is an unexpected error — not something you did wrong.</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button onclick="rptCrash(this,'\${esc(title)}','\${esc(fullDetail)}','\${esc(repo)}')"
+        style="background:var(--red);color:#fff;border:none;border-radius:4px;padding:4px 10px;cursor:pointer;font-size:11px">🐛 Report Bug</button>
+      <button onclick="this.closest('div[style]').remove()"
+        style="background:none;border:1px solid var(--br);border-radius:4px;padding:4px 10px;cursor:pointer;font-size:11px;color:var(--dim)">Dismiss</button>
+    </div>\`;
+  C.appendChild(d);sb2();}
+function rptCrash(btn,title,detail,repo){
+  if(!confirm('Report this bug to GitHub (BitConcepts/'+repo+')?\\n\\nData sent:\\n• Tool name + error message\\n• specsmith version, Python version, OS\\n• Error detail text\\n\\nNo personal data is included. You can review the full report before it is filed.\\n\\nProceed?'))return;
+  vscode.postMessage({command:'reportBug',bugTitle:'['+repo+'] '+title.slice(0,100),bugDetail:detail.slice(0,3000)});
+  btn.textContent='✓ Reported';btn.disabled=true;}
 function addS(m){
   const d=document.createElement('div');d.className='sl';
   d.innerHTML=\`<span>\${esc(m)}</span><span class="mts">\${ts()}</span>\`;
@@ -993,8 +1063,9 @@ window.addEventListener('message',({data})=>{switch(data.type){
   case 'ready':setBusy(false);addS(\`AEE Agent ready — \${data.provider||''}/\${data.model||''} (\${data.tools||0} tools)\`);
     if(data.project_dir){const l=document.getElementById('dlbl');l.textContent=data.project_dir.split(/[\\\\/]/).pop();l.title=data.project_dir}break;
   case 'llm_chunk':addA(data.text||'');break;
-  case 'tool_started':addS('  ⚙ '+(data.name||'?')+'…');break;
+  case 'tool_started':addTStart(data.name||'?',data.args||{});break;
   case 'tool_finished':addT(data.name||'?',data.result||'',!!data.is_error);break;
+  case 'tool_crash':addToolCrash(data);setBusy(false);break;
   case 'tokens':updTok(data.in_tokens||0,data.out_tokens||0,data.cost_usd||0);break;
   case 'turn_done':setBusy(false);break;
   case 'error':addE(data.message);setBusy(false);break;

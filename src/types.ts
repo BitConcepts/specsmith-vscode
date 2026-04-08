@@ -18,7 +18,8 @@ export interface SpecsmithEvent {
     | 'file_picked'   // synthetic: extension host → webview with file content
     | 'clear_display'    // synthetic: extension host → webview: clear chat UI
     | 'history_user'     // previous session user message replay
-    | 'history_agent';   // previous session agent message replay
+    | 'history_agent'   // previous session agent message replay
+    | 'tool_crash';     // critical tool failure — fail fast, ask to report
 
   // ready
   provider?: string;
@@ -58,6 +59,15 @@ export interface SpecsmithEvent {
   fileContent?: string;
   isImage?: boolean;
   dataUrl?: string;
+  // tool_crash
+  tool?: string;
+  summary?: string;
+  detail?: string;
+  specsmith_version?: string;
+  python_version?: string;
+  os_info?: string;
+  project_type?: string;
+  repo?: string; // 'specsmith' | 'specsmith-vscode'
 }
 
 /** Model info returned by provider APIs. */

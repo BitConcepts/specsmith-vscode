@@ -17,7 +17,16 @@ import * as vscode from 'vscode';
 import * as cp from 'child_process';
 import * as os from 'os';
 
-const REPO = 'BitConcepts/specsmith-vscode';
+// Default repo for manual/palette-triggered reports
+const DEFAULT_REPO = 'BitConcepts/specsmith-vscode';
+// Repo map by classification
+const REPO_MAP: Record<string, string> = {
+  'specsmith': 'BitConcepts/specsmith',
+  'specsmith-vscode': 'BitConcepts/specsmith-vscode',
+};
+function _resolveRepo(repo?: string): string {
+  return REPO_MAP[repo ?? ''] ?? DEFAULT_REPO;
+}
 
 // ── gh availability ────────────────────────────────────────────────────────────
 
@@ -37,10 +46,10 @@ interface GhIssue {
 }
 
 /** Search open issues for potential duplicates. Returns up to 5 matches. */
-async function _searchIssues(keywords: string): Promise<GhIssue[]> {
+async function _searchIssues(keywords: string, repo: string): Promise<GhIssue[]> {
   return new Promise((resolve) => {
     const query = keywords.replace(/[^a-zA-Z0-9 _-]/g, ' ').slice(0, 80);
-    const cmd = `gh issue list --repo ${REPO} --state open --search "${query}" --json number,title,url --limit 5`;
+    const cmd = `gh issue list --repo ${repo} --state open --search "${query}" --json number,title,url --limit 5`;
     cp.exec(cmd, { timeout: 8000 }, (err, stdout) => {
       if (err || !stdout.trim()) { resolve([]); return; }
       try {
@@ -54,12 +63,12 @@ async function _searchIssues(keywords: string): Promise<GhIssue[]> {
 // ── Issue creation ─────────────────────────────────────────────────────────────
 
 /** Create a new GitHub issue. Returns the issue URL or null on failure. */
-async function _createIssue(title: string, body: string): Promise<string | null> {
+async function _createIssue(title: string, body: string, repo: string): Promise<string | null> {
   return new Promise((resolve) => {
     // Write body to a temp file to avoid shell escaping issues
     const tmp = require('path').join(os.tmpdir(), `specsmith-bug-${Date.now()}.md`);
     require('fs').writeFileSync(tmp, body, 'utf8');
-    const cmd = `gh issue create --repo ${REPO} --title "${title.replace(/"/g, "'")}" --body-file "${tmp}" --label bug`;
+    const cmd = `gh issue create --repo ${repo} --title "${title.replace(/"/g, "'")}" --body-file "${tmp}" --label bug`;
     cp.exec(cmd, { timeout: 15000 }, (err, stdout) => {
       try { require('fs').unlinkSync(tmp); } catch { /* ignore */ }
       if (err) { resolve(null); return; }
@@ -70,11 +79,11 @@ async function _createIssue(title: string, body: string): Promise<string | null>
 }
 
 /** Add a comment to an existing issue. Returns true on success. */
-async function _commentIssue(issueNumber: number, comment: string): Promise<boolean> {
+async function _commentIssue(issueNumber: number, comment: string, repo: string): Promise<boolean> {
   return new Promise((resolve) => {
     const tmp = require('path').join(os.tmpdir(), `specsmith-comment-${Date.now()}.md`);
     require('fs').writeFileSync(tmp, comment, 'utf8');
-    const cmd = `gh issue comment ${issueNumber} --repo ${REPO} --body-file "${tmp}"`;
+    const cmd = `gh issue comment ${issueNumber} --repo ${repo} --body-file "${tmp}"`;
     cp.exec(cmd, { timeout: 10000 }, (err) => {
       try { require('fs').unlinkSync(tmp); } catch { /* ignore */ }
       resolve(!err);
@@ -84,7 +93,7 @@ async function _commentIssue(issueNumber: number, comment: string): Promise<bool
 
 // ── Clipboard fallback ────────────────────────────────────────────────────────
 
-async function _clipboardFallback(title: string, body: string): Promise<void> {
+async function _clipboardFallback(title: string, body: string, repo: string): Promise<void> {
   const report = `**Title:** ${title}\n\n${body}`;
   await vscode.env.clipboard.writeText(report);
   const action = await vscode.window.showInformationMessage(
@@ -93,7 +102,7 @@ async function _clipboardFallback(title: string, body: string): Promise<void> {
   );
   if (action === 'Open GitHub Issues') {
     await vscode.env.openExternal(
-      vscode.Uri.parse(`https://github.com/${REPO}/issues/new`),
+      vscode.Uri.parse(`https://github.com/${repo}/issues/new`),
     );
   }
 }
@@ -110,6 +119,8 @@ export interface BugReport {
   specsmithVersion?: string;
   /** OS info. */
   platform?: string;
+  /** Extra structured context (tool name, Python version, project type, etc.) */
+  extraContext?: Record<string, string>;
 }
 
 /**
@@ -118,7 +129,8 @@ export interface BugReport {
  * Checks for duplicates first, then either comments on an existing issue or
  * creates a new one.  Falls back to clipboard if `gh` is unavailable.
  */
-export async function reportBug(report: BugReport, skipConsent = false): Promise<void> {
+export async function reportBug(report: BugReport, skipConsent = false, targetRepo?: string): Promise<void> {
+  const REPO = _resolveRepo(targetRepo ?? report.platform);
   const { title, summary, detail, specsmithVersion, platform } = report;
 
   // ── Consent gate ────────────────────────────────────────────────────────────
@@ -139,6 +151,9 @@ export async function reportBug(report: BugReport, skipConsent = false): Promise
   }
 
   // Build a rich issue body
+  const extraLines = report.extraContext
+    ? Object.entries(report.extraContext).map(([k, v]) => `- **${k}**: ${v}`)
+    : [];
   const body = [
     `## Summary`,
     summary,
@@ -148,18 +163,19 @@ export async function reportBug(report: BugReport, skipConsent = false): Promise
     `- **Platform**: ${platform ?? `${os.platform()} ${os.release()}`}`,
     `- **VS Code**: ${vscode.version}`,
     `- **Extension**: specsmith-vscode`,
+    ...extraLines,
   ].filter(Boolean).join('\n');
 
   // Check gh availability
   const ghOk = await _ghAvailable();
   if (!ghOk) {
-    await _clipboardFallback(title, body);
+    await _clipboardFallback(title, body, REPO);
     return;
   }
 
   // Search for duplicates
   const keywords = title.replace(/[^a-zA-Z0-9 ]/g, ' ').split(' ').filter((w) => w.length > 3).slice(0, 6).join(' ');
-  const existing = await _searchIssues(keywords);
+  const existing = await _searchIssues(keywords, REPO);
 
   if (existing.length > 0) {
     // Show existing issues and let user decide
@@ -184,14 +200,14 @@ export async function reportBug(report: BugReport, skipConsent = false): Promise
 
     if (picked.label.startsWith('$(add)')) {
       // Create new
-      const url = await _createIssue(title, body);
+      const url = await _createIssue(title, body, REPO);
       _showResult(url, 'created');
     } else {
       // Comment on existing
       const issueNumber = parseInt(picked.label.slice(1), 10);
       if (isNaN(issueNumber)) { return; }
       const comment = `## Additional occurrence\n\n${body}`;
-      const ok = await _commentIssue(issueNumber, comment);
+      const ok = await _commentIssue(issueNumber, comment, REPO);
       if (ok) {
         const url = existing.find((i) => i.number === issueNumber)?.url;
         _showResult(url ?? null, 'commented');
@@ -201,7 +217,7 @@ export async function reportBug(report: BugReport, skipConsent = false): Promise
     }
   } else {
     // No duplicates — create directly
-    const url = await _createIssue(title, body);
+    const url = await _createIssue(title, body, REPO);
     _showResult(url, 'created');
   }
 }
