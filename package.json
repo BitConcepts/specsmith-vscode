@@ -24,7 +24,7 @@
     },
     "commands": [
       { "command": "specsmith.newSession",            "title": "New Agent Session",          "category": "specsmith", "icon": "$(add)" },
-      { "command": "specsmith.newSessionFromProject", "title": "Open Agent Session",          "category": "specsmith", "icon": "$(play)" },
+      { "command": "specsmith.newSessionFromProject", "title": "Open Agent Session",          "category": "specsmith", "icon": "$(comment-discussion)" },
       { "command": "specsmith.deleteSession",         "title": "Remove Session",              "category": "specsmith", "icon": "$(trash)" },
       { "command": "specsmith.openProject",           "title": "Add Project Folder",          "category": "specsmith", "icon": "$(folder-opened)" },
       { "command": "specsmith.createProject",         "title": "Create New Project",          "category": "specsmith", "icon": "$(add)" },
@@ -47,7 +47,7 @@
       { "command": "specsmith.navigateRequirements",  "title": "Navigate Requirements",       "category": "specsmith", "icon": "$(list-unordered)" },
       { "command": "specsmith.openScaffold",          "title": "Open Scaffolding File",       "category": "specsmith", "icon": "$(settings-gear)" },
       { "command": "specsmith.showHelp",              "title": "Show Help",                   "category": "specsmith", "icon": "$(question)" },
-      { "command": "specsmith.showGovernance",        "title": "Open Governance Panel",        "category": "specsmith", "icon": "$(book)" },
+      { "command": "specsmith.showGovernance",        "title": "Open Settings Panel",          "category": "specsmith", "icon": "$(settings-gear)" },
       { "command": "specsmith.installOrUpgrade",      "title": "Install or Upgrade specsmith", "category": "specsmith", "icon": "$(cloud-download)" },
       { "command": "specsmith.clearHistory",          "title": "Clear Chat History (current session)",   "category": "specsmith", "icon": "$(clear-all)" },
       { "command": "specsmith.clearAllHistory",       "title": "Clear Chat History (all sessions)",      "category": "specsmith", "icon": "$(clear-all)" },
@@ -115,7 +115,7 @@
         "specsmith.autoOpenGovernancePanel": {
           "type": "boolean",
           "default": true,
-          "description": "Automatically open the Governance panel when VS Code starts with a workspace folder."
+          "description": "Automatically open the Settings panel when VS Code starts with a workspace folder. The Settings panel also opens automatically whenever a new agent session is started."
         },
         "specsmith.ollamaContextLength": {
           "type": "number",

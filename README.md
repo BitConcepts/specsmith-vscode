@@ -39,7 +39,7 @@ Track exactly where your project is in the Applied Epistemic Engineering cycle:
    → ⚙ Implementation → 🔬 Verification → 🚀 Release
 ```
 
-The Governance Panel shows a live phase bar with:
+The Settings Panel shows a live phase bar with:
 - Current phase pill with emoji and label
 - Readiness % (how many prerequisites are satisfied)
 - Step indicator (e.g. `step 3/7`)
@@ -111,7 +111,7 @@ API keys stored in OS credential store (Windows Credential Manager / macOS Keych
 5. Set API key: `Ctrl+Shift+P → specsmith: Set API Key`
 6. Press `Ctrl+Shift+;` to start an agent session
 
-The Governance Panel opens automatically when a workspace is present.
+The Settings Panel opens automatically when a workspace is present.
 
 ---
 
@@ -120,7 +120,7 @@ The Governance Panel opens automatically when a workspace is present.
 | Command | Shortcut | Description |
 |---------|----------|-------------|
 | `specsmith: New Agent Session` | `Ctrl+Shift+;` | Open a new agent session tab |
-| `specsmith: Open Governance Panel` | `Ctrl+Shift+G` | Open the 5-tab Governance Panel |
+| `specsmith: Open Settings Panel` | `Ctrl+Shift+G` | Open the 6-tab Settings Panel |
 | `specsmith: Set API Key` | | Store an LLM API key securely |
 | `specsmith: API Key Status` | | Show which keys are configured |
 | `specsmith: Clear API Key` | | Remove a stored key |
@@ -159,7 +159,7 @@ The Governance Panel opens automatically when a workspace is present.
 | Shortcut | Action |
 |----------|--------|
 | `Ctrl+Shift+;` | New agent session |
-| `Ctrl+Shift+G` | Open Governance Panel |
+| `Ctrl+Shift+G` | Open Settings Panel |
 | `Ctrl+Shift+R` | Quick add requirement |
 | `Ctrl+Shift+Q` | Navigate requirements (QuickPick) |
 | `Enter` | Send message |

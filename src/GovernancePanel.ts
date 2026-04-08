@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 BitConcepts, LLC. All rights reserved.
 /**
- * GovernancePanel v3 — 5-tab AI-assisted governance workbench.
+ * GovernancePanel v3 — 6-tab Settings panel.
  *
- * Tabs:  Project | Tools | Files | Updates & System | Actions & AI
+ * Tabs:  Project | Tools | Files | Updates & System | Actions & AI | Execution
  */
 import * as vscode from 'vscode';
 import * as cp from 'child_process';
@@ -1283,7 +1283,7 @@ ${upd ? `<div class="upd-banner">⬆ specsmith <b>${data.availableVersion}</b> a
 <div class="btn-row" style="margin-top:5px;margin-bottom:2px">
   <button class="btn-sm" onclick="suggestDisciplines()" title="Suggest disciplines based on current project type and detected languages">💡 Suggest by Languages</button>
 </div>
-<h3>Target Platforms</h3>
+<h3 title="Platforms this project is built/tested for in CI/CD — not the host OS running VS Code">CI/CD Build Platforms</h3>
 <div class="chips">${chips(PLATFORMS, selP, 'platform')}</div>
 <h3 style="margin-top:12px">🗂 Installed Ollama Models</h3>
 <div id="ollama-mdl-load" class="dim" style="margin:4px 0">Click Refresh to load installed models</div>

@@ -227,12 +227,12 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
   );
 
-  // Startup: fetch models, update check, and auto-open governance panel
+  // Startup: fetch models, update check, and auto-open Settings panel
   void _startupFetchModels(context);
   void _checkForSpecsmithUpdate(context);
   void _autoOpenGovernancePanel(context, openSession);
 
-  // Keep governance panel in sync when workspace folders change
+  // Keep Settings panel in sync when workspace folders change
   context.subscriptions.push(
     vscode.workspace.onDidChangeWorkspaceFolders(() => {
       // If the panel is open and the project dir changed, it will be refreshed on next focus
@@ -541,7 +541,7 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
   );
 
-  // ── Commands: Governance panel ─────────────────────────────────────
+  // ── Commands: Settings panel ─────────────────────────────────────
 
   context.subscriptions.push(
     vscode.commands.registerCommand('specsmith.showGovernance', () => {
@@ -699,7 +699,7 @@ async function _checkForSpecsmithUpdate(context: vscode.ExtensionContext): Promi
 }
 
 /**
- * Auto-open the Governance panel when VS Code starts with a workspace.
+ * Auto-open the Settings panel when VS Code starts with a workspace.
  * Opens Beside the editor after a short delay so it doesn't block activation.
  * Respects a user setting to disable: specsmith.autoOpenGovernancePanel = false.
  */

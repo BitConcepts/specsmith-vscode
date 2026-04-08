@@ -126,7 +126,7 @@ scripts. This is acceptable because:
 
 ---
 
-## Making Changes to the GovernancePanel
+## Making Changes to the Settings Panel
 
 The Settings panel is generated as a single `/* html */` template literal in `_html()`. All
 tab panes are rendered at once and shown/hidden with CSS `display`. This avoids any async
