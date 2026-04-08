@@ -488,24 +488,51 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('specsmith.installOrUpgrade', async () => {
       const cfg      = vscode.workspace.getConfiguration('specsmith');
       const execPath = cfg.get<string>('executablePath', 'specsmith');
-
-      // Probe current version (try configured path + pipx bin fallback)
-      const version = _probeVersion(execPath);
-
+      const version  = _probeVersion(execPath);
       const isInstalled = version !== null;
-      const items: vscode.QuickPickItem[] = isInstalled
-        ? [
-            { label: '$(arrow-up) Upgrade specsmith via pipx',       description: `current: ${version} → pipx upgrade specsmith` },
-            { label: '$(info) Copy specsmith path to clipboard',      description: execPath },
-          ]
-        : [
-            { label: '$(cloud-download) Install via pipx',           description: 'pipx install specsmith (then pipx inject specsmith anthropic)' },
-          ];
+      // Detect if the running version is a dev/pre-release build
+      const isDevVersion = version?.includes('.dev') || version?.includes('a') || version?.includes('b') || version?.includes('rc');
+
+      const items: vscode.QuickPickItem[] = [];
+
+      if (isInstalled) {
+        items.push(
+          {
+            label:       '$(arrow-up) Upgrade to latest stable',
+            description: `pipx upgrade specsmith`,
+            detail:      `Current: ${version} → latest stable release from PyPI`,
+          },
+          {
+            label:       '$(beaker) Upgrade to latest dev (pre-release)',
+            description: `pipx install specsmith --pip-args="--pre" --force`,
+            detail:      'Installs the newest 0.x.y.devN build — cutting-edge, may have rough edges',
+          },
+          {
+            label:       '$(info) Copy specsmith path to clipboard',
+            description: execPath,
+            detail:      'Use if you need to configure the extension manually',
+          },
+        );
+      } else {
+        items.push(
+          {
+            label:       '$(cloud-download) Install specsmith (stable)',
+            description: 'pipx install specsmith',
+            detail:      'Recommended. Installs the latest stable release.',
+          },
+          {
+            label:       '$(beaker) Install specsmith (dev / pre-release)',
+            description: 'pipx install specsmith --pip-args="--pre"',
+            detail:      'Installs the latest dev build from PyPI.',
+          },
+        );
+      }
 
       const picked = await vscode.window.showQuickPick(items, {
         placeHolder: isInstalled
-          ? `specsmith ${version} installed — upgrade?`
-          : 'specsmith not found — choose install method',
+          ? `specsmith ${version}${isDevVersion ? ' (dev)' : ''} installed — choose an action`
+          : 'specsmith not found — install it first',
+        matchOnDetail: true,
       });
       if (!picked) { return; }
 
@@ -517,29 +544,155 @@ export function activate(context: vscode.ExtensionContext): void {
 
       const term = vscode.window.createTerminal({ name: 'specsmith install', shellPath: _shellPath() });
       term.show();
-
-      const channel = cfg.get<string>('releaseChannel', 'stable');
-      const isPre    = channel === 'pre-release';
-      if (picked.label.includes('Upgrade')) {
-        // --pre not supported by pipx upgrade; reinstall with force instead
-        term.sendText(isPre
-          ? 'pipx install specsmith --pip-args="--pre" --force'
-          : 'pipx upgrade specsmith');
-      } else if (picked.label.includes('Install')) {
-        term.sendText(isPre
-          ? 'pipx install specsmith --pip-args="--pre"'
-          : 'pipx install specsmith');
-      }
+      // Run the command exactly as shown in the description
+      term.sendText(picked.description ?? '');
 
       void vscode.window.showInformationMessage(
-        'specsmith install/upgrade running in the terminal below. ' +
-        'Reload the window after it completes.',
+        'specsmith install/upgrade running in the terminal. Reload the window after it finishes.',
         'Reload Now',
       ).then((a) => {
         if (a === 'Reload Now') {
           void vscode.commands.executeCommand('workbench.action.reloadWindow');
         }
       });
+    }),
+  );
+
+  // ── Commands: Report Issue (rich multi-step) ──────────────────────────────
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('specsmith.reportIssue', async () => {
+      const version = _probeVersion(
+        vscode.workspace.getConfiguration('specsmith').get<string>('executablePath', 'specsmith') ?? 'specsmith',
+      ) ?? 'unknown';
+
+      // ── Step 1: issue type ─────────────────────────────────────────────
+      const issueType = await vscode.window.showQuickPick(
+        [
+          { label: '$(bug) Bug Report',              description: 'Something is broken or behaving incorrectly', value: 'bug' },
+          { label: '$(lightbulb) Feature Request',   description: 'A new capability or improvement idea',       value: 'enhancement' },
+          { label: '$(question) Question / Feedback', description: 'Not a bug, just a question or suggestion',   value: 'question' },
+        ],
+        { placeHolder: 'What kind of issue is this?' },
+      ) as (vscode.QuickPickItem & { value: string }) | undefined;
+      if (!issueType) { return; }
+
+      // ── Step 2: which repo ──────────────────────────────────────────────
+      const repoPick = await vscode.window.showQuickPick(
+        [
+          {
+            label:       '$(terminal) specsmith CLI',
+            description: 'github.com/BitConcepts/specsmith',
+            detail:      'CLI commands, agent behaviour, audit/validate/doctor, tool crashes, scaffolding',
+            value:       'specsmith',
+          },
+          {
+            label:       '$(extensions) specsmith-vscode Extension',
+            description: 'github.com/BitConcepts/specsmith-vscode',
+            detail:      'VS Code UI, session panel, sidebar, governance panel, bug reporter, file injection',
+            value:       'specsmith-vscode',
+          },
+          {
+            label:       '$(question) Not sure',
+            description: 'File under specsmith-vscode and we will triage',
+            value:       'specsmith-vscode',
+          },
+        ],
+        { placeHolder: 'Which part of specsmith does this affect?', matchOnDetail: true },
+      ) as (vscode.QuickPickItem & { value: string }) | undefined;
+      if (!repoPick) { return; }
+      const targetRepo = repoPick.value;
+
+      // ── Step 3: title ──────────────────────────────────────────────────
+      const TITLE_HINTS: Record<string, string> = {
+        bug:         'e.g. “audit crashes with UnicodeDecodeError on Windows”',
+        enhancement: 'e.g. “add support for multi-file drag-and-drop”',
+        question:    'e.g. “how do I use specsmith with a monorepo?”',
+      };
+      const title = await vscode.window.showInputBox({
+        prompt: `${issueType.label.replace(/^\$\(.*?\) /, '')} title`,
+        placeHolder: TITLE_HINTS[issueType.value] ?? 'A clear, one-line summary',
+        validateInput: (v) => v.trim().length < 5 ? 'Please write at least 5 characters' : undefined,
+      });
+      if (!title) { return; }
+
+      // ── Step 4: description ────────────────────────────────────────────
+      const DESC_HINTS: Record<string, string> = {
+        bug:         'What happened? What did you expect? Include any error messages.',
+        enhancement: 'What problem would this solve? What would the ideal behaviour look like?',
+        question:    'What are you trying to do? What have you already tried?',
+      };
+      const description = await vscode.window.showInputBox({
+        prompt: DESC_HINTS[issueType.value],
+        placeHolder: 'Be as specific as possible. The more detail, the faster we can help.',
+      });
+      if (description === undefined) { return; }
+
+      // ── Step 5: steps to reproduce (bugs only) ───────────────────────────
+      let stepsToRepro = '';
+      if (issueType.value === 'bug') {
+        stepsToRepro = await vscode.window.showInputBox({
+          prompt: 'Steps to reproduce (optional but very helpful)',
+          placeHolder: '1. Open a session  2. Run doctor  3. See error',
+        }) ?? '';
+      }
+
+      // ── Step 6: include recent chat? ───────────────────────────────────
+      let chatContext = '';
+      const session = SessionPanel.current();
+      if (session) {
+        const recentMsgs = session.getRecentMessages(8);
+        if (recentMsgs) {
+          const includeChatPick = await vscode.window.showQuickPick(
+            [
+              { label: '$(comment-discussion) Yes — include last 8 messages', description: 'Helps reproduce context-sensitive issues', value: 'yes' },
+              { label: '$(circle-slash) No — leave chat out',                 description: 'Keep the report minimal',                   value: 'no' },
+            ],
+            { placeHolder: 'Include recent chat messages in the report? (they may contain project details)' },
+          ) as (vscode.QuickPickItem & { value: string }) | undefined;
+          if (includeChatPick?.value === 'yes') {
+            chatContext = recentMsgs;
+          }
+        }
+      }
+
+      // ── Step 7: build issue body ───────────────────────────────────────────
+      const bodyParts: string[] = [
+        `## Description`,
+        description || '(no description provided)',
+      ];
+      if (stepsToRepro) {
+        bodyParts.push(`\n## Steps to Reproduce`, stepsToRepro);
+      }
+      if (chatContext) {
+        bodyParts.push(`\n## Recent Chat Context`, '```', chatContext, '```');
+      }
+      bodyParts.push(
+        `\n## Environment`,
+        `- **specsmith**: ${version}`,
+        `- **VS Code**: ${vscode.version}`,
+        `- **Extension**: specsmith-vscode`,
+        `- **OS**: ${process.platform}`,
+      );
+      const issueBody = bodyParts.join('\n');
+
+      // ── Step 8: consent + file ─────────────────────────────────────────
+      const { reportBug } = await import('./BugReporter');
+      await reportBug(
+        {
+          title:            `${title.trim()}`,
+          summary:          description || '(no description provided)',
+          detail:           issueBody,
+          specsmithVersion: version,
+          extraContext:     {
+            'Issue type': issueType.value,
+            ...(stepsToRepro ? { 'Steps to reproduce': stepsToRepro } : {}),
+            ...(chatContext   ? { 'Chat context included': 'yes (last 8 messages)' } : {}),
+          },
+        },
+        false,
+        targetRepo,
+      );
     }),
   );
 

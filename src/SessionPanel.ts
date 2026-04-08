@@ -440,6 +440,14 @@ export class SessionPanel implements vscode.Disposable {
         );
         break;
       }
+
+      case 'reportIssue':
+        void vscode.commands.executeCommand('specsmith.reportIssue');
+        break;
+
+      case 'installOrUpgrade':
+        void vscode.commands.executeCommand('specsmith.installOrUpgrade');
+        break;
     }
   }
 
@@ -472,6 +480,39 @@ export class SessionPanel implements vscode.Disposable {
         emit('\u26a0 scaffold.yml not found. Run specsmith init or specsmith import to set up governance.');
       }
     } catch { /* ignore — non-blocking */ }
+  }
+
+  /**
+   * Return the last `n` chat messages formatted as plain text for inclusion
+   * in a bug/issue report. Reads from the current session's chat stream
+   * (JSONL on disk) so it works even if the webview is not open.
+   */
+  getRecentMessages(n = 10): string {
+    try {
+      const chatDir = path.join(this._config.projectDir, CHAT_DIR);
+      if (!fs.existsSync(chatDir)) { return ''; }
+      // Find the current session file first, else most recent
+      const files = fs.readdirSync(chatDir)
+        .filter((f) => f.endsWith('.jsonl'))
+        .sort()
+        .reverse();
+      if (!files.length) { return ''; }
+      const target = this._chatFile
+        ? path.basename(this._chatFile)
+        : files[0];
+      const filePath = path.join(chatDir, target);
+      if (!fs.existsSync(filePath)) { return ''; }
+      const lines = fs.readFileSync(filePath, 'utf8')
+        .trim()
+        .split('\n')
+        .slice(-n)
+        .map((l) => { try { return JSON.parse(l) as { role: string; text: string; ts: string }; } catch { return null; } })
+        .filter(Boolean) as { role: string; text: string; ts: string }[];
+      if (!lines.length) { return ''; }
+      return lines
+        .map((e) => `[${e.role.toUpperCase()} ${e.ts.slice(0, 16)}] ${e.text.slice(0, 500)}`)
+        .join('\n');
+    } catch { return ''; }
   }
 
   setModelExternal(modelId: string): void {
@@ -645,9 +686,11 @@ export class SessionPanel implements vscode.Disposable {
   <select id="ms" style="min-width:148px"></select>
   <span id="mdesc" title=""></span>
   <span style="flex:1"></span>
-  <button class="hbtn" title="Copy all messages" onclick="copyAll()" id="cab">⎘</button>
+  <button class="hbtn" title="Copy all messages" onclick="copyAll()" id="cab">⎍</button>
   <button class="hbtn" title="Clear chat history" onclick="doClearHistory()">🗑</button>
   <button class="hbtn" title="Export chat as markdown" onclick="exportChat()">⬇</button>
+  <button class="hbtn" title="Report an issue or suggest a feature" onclick="vscode.postMessage({command:'reportIssue'})">📝</button>
+  <button class="hbtn" title="Install / Upgrade specsmith" onclick="vscode.postMessage({command:'installOrUpgrade'})">⬆</button>
   <button class="hbtn" title="Help (keyboard shortcuts, commands, usage)" onclick="vscode.postMessage({command:'showHelp'})">\u2753</button>
 </div>
 <div id="chat"></div>

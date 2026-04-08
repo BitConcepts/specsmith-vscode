@@ -2,7 +2,7 @@
   "name": "specsmith-vscode",
   "displayName": "specsmith — AEE Workbench",
   "description": "Applied Epistemic Engineering workbench. 6-tab Settings panel, AI agent sessions, execution profiles, FPGA/HDL tool support, Ollama local LLMs, and tool installer.",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "publisher": "BitConcepts",
   "license": "MIT",
   "engines": { "vscode": "^1.85.0" },
@@ -54,7 +54,8 @@
       { "command": "specsmith.clearAllHistory",       "title": "Clear Chat History (all sessions)",      "category": "specsmith", "icon": "$(clear-all)" },
       { "command": "specsmith.downloadModel",         "title": "Download Ollama Model",                  "category": "specsmith", "icon": "$(cloud-download)" },
       { "command": "specsmith.selectModelForTask",    "title": "Select Model for Task (GPU-aware)",      "category": "specsmith", "icon": "$(symbol-misc)" },
-      { "command": "specsmith.reportBug",              "title": "Report a Bug",                           "category": "specsmith", "icon": "$(bug)" }
+      { "command": "specsmith.reportBug",    "title": "Report a Bug",              "category": "specsmith", "icon": "$(bug)" },
+      { "command": "specsmith.reportIssue",  "title": "Report Issue / Suggest Feature", "category": "specsmith", "icon": "$(comment-discussion)" }
     ],
     "menus": {
       "view/title": [
