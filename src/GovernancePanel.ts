@@ -11,7 +11,10 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { augmentedEnv, findSpecsmith } from './bridge';
-import { getVenvSpecsmithVersion, buildCreateVenvCommands, buildUpdateVenvCommand, buildDeleteVenvCommands, ensureGitignored } from './VenvManager';
+import {
+  getGlobalVenvDir, venvExists, getVenvSpecsmith,
+  getVenvSpecsmithVersion, buildCreateVenvCommands, buildUpdateVenvCommand, buildDeleteVenvCommands,
+} from './VenvManager';
 
 let _panel: vscode.WebviewPanel | undefined;
 let _ctx: vscode.ExtensionContext | undefined;
@@ -317,21 +320,20 @@ function _loadProjectData(projectDir: string, context: vscode.ExtensionContext):
     return [{ rel, label, exists, lines, addCmd: addType } as GovFile];
   });
 
-  let installedVersion: string | null = null;
-  try {
-    const exec = vscode.workspace.getConfiguration('specsmith').get<string>('executablePath', 'specsmith');
-    // Use the SAME findSpecsmith logic as bridge.ts: iterates through the augmented
-    // PATH and verifies the binary is >= 0.3.1. This guarantees parity between the
-    // session (bridge) and the Settings panel version display.
-    const resolved = findSpecsmith(exec, _ENV.PATH ?? '');
-    const r = cp.spawnSync(resolved, ['--version'], { timeout: 3000, encoding: 'utf8' });
-    if (r.status === 0) {
-      // Capture the full PEP 440 version including pre-release suffix (.devN, aN, bN, rcN)
-      // so the panel shows "0.3.6.dev171" rather than stripping it to "0.3.6".
-      const m = (r.stdout ?? '').match(/(\d+\.\d+\.\d+(?:\.dev\d+|a\d+|b\d+|rc\d+)?)/);
-      installedVersion = m?.[1] ?? null;
-    }
-  } catch { /* ignore */ }
+  // Prefer the venv version — that is what the bridge actually runs.
+  // Fall back to system specsmith only when no venv exists yet.
+  let installedVersion: string | null = getVenvSpecsmithVersion();
+  if (!installedVersion) {
+    try {
+      const exec = vscode.workspace.getConfiguration('specsmith').get<string>('executablePath', 'specsmith');
+      const resolved = findSpecsmith(exec, _ENV.PATH ?? '');
+      const r = cp.spawnSync(resolved, ['--version'], { timeout: 3000, encoding: 'utf8' });
+      if (r.status === 0) {
+        const m = (r.stdout ?? '').match(/(\d+\.\d+\.\d+(?:\.dev\d+|a\d+|b\d+|rc\d+)?)/);
+        installedVersion = m?.[1] ?? null;
+      }
+    } catch { /* ignore */ }
+  }
 
   const avail     = context.globalState.get<string>('specsmith.availableVersion', '');
   const checkMs   = context.globalState.get<number>('specsmith.lastVersionCheck', 0);
@@ -344,7 +346,7 @@ function _loadProjectData(projectDir: string, context: vscode.ExtensionContext):
   const releaseChannel = vscode.workspace.getConfiguration('specsmith').get<string>('releaseChannel', 'stable');
 
   // Project-local venv version (null if no venv)
-  const venvVersion = getVenvSpecsmithVersion(projectDir);
+  const venvVersion = getVenvSpecsmithVersion();
 
   return { projectDir, scaffold, govFiles, installedVersion, availableVersion: avail || null, lastUpdateCheck: lastCheck, phase, releaseChannel, venvVersion };
 }
@@ -360,9 +362,13 @@ async function _handleMsg(msg: GovMsg): Promise<void> {
       break;
 
     case 'runCommand': {
-      const exec = vscode.workspace.getConfiguration('specsmith').get<string>('executablePath', 'specsmith');
+      // Prefer the global venv binary so terminal commands use the same
+      // specsmith version as the bridge — prevents version mismatches.
+      const venvBin = getVenvSpecsmith();
+      const exec = venvBin
+        ?? vscode.workspace.getConfiguration('specsmith').get<string>('executablePath', 'specsmith');
       const term = vscode.window.createTerminal({ name: 'specsmith', cwd: _projectDir });
-      term.sendText(`${exec} ${msg.cmd} --project-dir "${_projectDir}"`);
+      term.sendText(`"${exec}" ${msg.cmd} --project-dir "${_projectDir}"`);
       term.show();
       break;
     }
@@ -405,9 +411,11 @@ async function _handleMsg(msg: GovMsg): Promise<void> {
     case 'installUpdate': {
       const channel = vscode.workspace.getConfiguration('specsmith').get<string>('releaseChannel', 'stable');
       const isPre   = channel === 'pre-release';
+      // Use ; not || — PowerShell 5 does not support the || operator.
+      // Both commands run; if pipx succeeds pip is a no-op, and vice-versa.
       const upgradeCmd = isPre
-        ? 'pipx install specsmith --pip-args="--pre" --force || pip install --pre --upgrade specsmith'
-        : 'pipx upgrade specsmith || pip install --upgrade specsmith';
+        ? 'pipx install specsmith --pip-args="--pre" --force; pip install --pre --upgrade specsmith'
+        : 'pipx upgrade specsmith; pip install --upgrade specsmith';
       const term = vscode.window.createTerminal({ name: 'specsmith upgrade', shellPath: _shellPath() });
       term.sendText(upgradeCmd);
       term.show();
@@ -512,7 +520,6 @@ async function _handleMsg(msg: GovMsg): Promise<void> {
     case 'createVenv': {
       const ch2 = vscode.workspace.getConfiguration('specsmith').get<string>('releaseChannel', 'stable') as 'stable' | 'pre-release';
       const { ApiKeyManager } = await import('./ApiKeyManager');
-      // Detect which providers have API keys set and install their packages
       const providerPkgMap: Record<string, string> = {
         anthropic: 'anthropic', openai: 'openai',
         gemini: 'google-generativeai', mistral: 'mistralai',
@@ -522,14 +529,12 @@ async function _handleMsg(msg: GovMsg): Promise<void> {
         const key = await ApiKeyManager.getKey(_ctx.secrets, prov);
         if (key) { providers.push(pkg); }
       }
-      const cmds = buildCreateVenvCommands(_projectDir, ch2, providers);
-      const term = vscode.window.createTerminal({ name: 'specsmith venv', cwd: _projectDir, shellPath: _shellPath() });
-      // Join with && so later steps only run if earlier ones succeed
+      const cmds = buildCreateVenvCommands(ch2, providers);
+      const term = vscode.window.createTerminal({ name: 'specsmith: create env', shellPath: _shellPath() });
       term.sendText(cmds.join(' && '));
       term.show();
-      ensureGitignored(_projectDir);
       void vscode.window.showInformationMessage(
-        'Creating project environment in terminal. Reload the window when done.',
+        `Creating specsmith environment (~/.specsmith/venv) in terminal. Reload VS Code when done.`,
         'Reload Now',
       ).then((a) => {
         if (a === 'Reload Now') { void vscode.commands.executeCommand('workbench.action.reloadWindow'); }
@@ -539,8 +544,8 @@ async function _handleMsg(msg: GovMsg): Promise<void> {
 
     case 'updateVenv': {
       const ch3 = vscode.workspace.getConfiguration('specsmith').get<string>('releaseChannel', 'stable') as 'stable' | 'pre-release';
-      const term2 = vscode.window.createTerminal({ name: 'specsmith venv update', cwd: _projectDir, shellPath: _shellPath() });
-      term2.sendText(buildUpdateVenvCommand(_projectDir, ch3));
+      const term2 = vscode.window.createTerminal({ name: 'specsmith: update env', shellPath: _shellPath() });
+      term2.sendText(buildUpdateVenvCommand(ch3));
       term2.show();
       _panel?.webview.postMessage({ type: 'installStarted' });
       break;
@@ -548,17 +553,17 @@ async function _handleMsg(msg: GovMsg): Promise<void> {
 
     case 'deleteVenv': {
       const confirm = await vscode.window.showWarningMessage(
-        'Delete the project environment (.specsmith/venv)?  This removes the isolated specsmith install for this project.',
+        'Delete the global specsmith environment (~/.specsmith/venv)?  This will break all agent sessions until it is recreated.',
         { modal: true },
         'Delete',
       );
       if (confirm !== 'Delete') { break; }
-      const delCmds = buildDeleteVenvCommands(_projectDir);
-      const delTerm = vscode.window.createTerminal({ name: 'specsmith venv delete', cwd: _projectDir, shellPath: _shellPath() });
+      const delCmds = buildDeleteVenvCommands();
+      const delTerm = vscode.window.createTerminal({ name: 'specsmith: delete env', shellPath: _shellPath() });
       delTerm.sendText(delCmds.join(' ; '));
       delTerm.show();
       void vscode.window.showInformationMessage(
-        'Project environment deleted. Reload the window to reflect the change.',
+        'Environment deleted. Reload VS Code to reflect the change.',
         'Reload Now',
       ).then((a) => {
         if (a === 'Reload Now') { void vscode.commands.executeCommand('workbench.action.reloadWindow'); }
@@ -568,7 +573,7 @@ async function _handleMsg(msg: GovMsg): Promise<void> {
 
     case 'rebuildVenv': {
       const confirmRb = await vscode.window.showWarningMessage(
-        'Rebuild the project environment?  This will delete .specsmith/venv and reinstall specsmith from scratch.',
+        'Rebuild the global specsmith environment?  This will delete ~/.specsmith/venv and reinstall specsmith from scratch.',
         { modal: true },
         'Rebuild',
       );
@@ -584,14 +589,13 @@ async function _handleMsg(msg: GovMsg): Promise<void> {
         const key = await AKM2.getKey(_ctx.secrets, prov);
         if (key) { providersRb.push(pkg); }
       }
-      const delCmdsRb  = buildDeleteVenvCommands(_projectDir);
-      const createCmds = buildCreateVenvCommands(_projectDir, chRb, providersRb);
-      const rbTerm = vscode.window.createTerminal({ name: 'specsmith venv rebuild', cwd: _projectDir, shellPath: _shellPath() });
+      const delCmdsRb  = buildDeleteVenvCommands();
+      const createCmds = buildCreateVenvCommands(chRb, providersRb);
+      const rbTerm = vscode.window.createTerminal({ name: 'specsmith: rebuild env', shellPath: _shellPath() });
       rbTerm.sendText([...delCmdsRb, ...createCmds].join(' && '));
       rbTerm.show();
-      ensureGitignored(_projectDir);
       void vscode.window.showInformationMessage(
-        'Rebuilding project environment in terminal. Reload the window when done.',
+        'Rebuilding environment in terminal. Reload VS Code when done.',
         'Reload Now',
       ).then((a) => {
         if (a === 'Reload Now') { void vscode.commands.executeCommand('workbench.action.reloadWindow'); }
@@ -1143,7 +1147,10 @@ async function _addGovFile(context: vscode.ExtensionContext, projectDir: string,
 }
 
 function _shellPath(): string | undefined {
-  return process.platform === 'win32' ? (process.env.ComSpec ?? 'powershell.exe') : process.env.SHELL;
+  // Always use PowerShell on Windows — many commands (Remove-Item, Test-Path,
+  // Start-Process, Write-Host) are PowerShell-specific and fail in cmd.exe.
+  if (process.platform === 'win32') { return 'powershell.exe'; }
+  return process.env.SHELL;
 }
 
 // ── Phase reading ────────────────────────────────────────────────────────
@@ -1427,7 +1434,7 @@ ${upd ? `<div class="upd-banner">⬆ specsmith <b>${data.availableVersion}</b> a
 <div id="t-updates" class="tab-pane">
 <h3>specsmith Version</h3>
 <div class="ver-grid">
-  <span class="ver-lbl">Installed</span><span class="ver-val">${data.installedVersion ?? '—'}</span>
+<span class="ver-lbl">Installed</span><span class="ver-val" id="ver-installed">${data.installedVersion ?? '—'}</span>
   <span class="ver-lbl">Available</span><span class="ver-val" id="ver-avail">${data.availableVersion ?? '(not checked)'}</span>
   <span class="ver-lbl">Last check</span><span class="ver-lbl" id="last-check">${data.lastUpdateCheck ?? 'never'}</span>
   <span class="ver-lbl">Channel</span>
@@ -1440,13 +1447,13 @@ ${upd ? `<div class="upd-banner">⬆ specsmith <b>${data.availableVersion}</b> a
   <button class="btn" id="chk-btn" onclick="chkVer()">🔍 Check for Updates</button>
   ${upd ? '<button class="btn btn-upd" onclick="installUpd()">⬆ Install Update</button>' : ''}
 </div>
-<h3 style="margin-top:16px">Project Environment (.specsmith/venv)</h3>
-<div class="info-box" style="font-size:11px">A project-local venv isolates specsmith from system PATH, preventing version conflicts when multiple installs exist. The session panel uses it automatically when present.</div>
+<h3 style="margin-top:16px">specsmith Environment (~/.specsmith/venv)</h3>
+<div class="info-box" style="font-size:11px">A global specsmith environment isolates the agent from system PATH and ensures all projects use the same version. All agent sessions and terminal commands use it automatically. Required — sessions cannot start without it.</div>
 <div class="ver-grid">
   <span class="ver-lbl">Status</span>
-  <span class="ver-val" style="color:${data.venvVersion ? 'var(--grn)' : 'var(--dim)'}">${data.venvVersion ? '\u2713 Active' : '\u2014 Not created'}</span>
+  <span class="ver-val" style="color:${data.venvVersion ? 'var(--grn)' : 'var(--red)'}">${data.venvVersion ? '\u2713 Active' : '\u2717 Not installed'}</span>
   ${data.venvVersion ? `<span class="ver-lbl">Version</span><span class="ver-val">${data.venvVersion}</span>` : ''}
-  <span class="ver-lbl">Location</span><span class="ver-lbl">.specsmith/venv/</span>
+  <span class="ver-lbl">Location</span><span class="ver-lbl" title="Global specsmith environment">~/.specsmith/venv/</span>
 </div>
 <div class="btn-row" style="margin-bottom:14px">
   ${data.venvVersion
@@ -1544,6 +1551,8 @@ ${prompts}
 
 <script>
 const vscode=acquireVsCodeApi();
+// Installed version embedded at page-load — more reliable than DOM scraping later.
+const INST_VER=${JSON.stringify(data.installedVersion ?? '')};
 const LANGUAGES=${JSON.stringify(LANGUAGES)};
 const FPGA_TOOLS=${JSON.stringify(FPGA_TOOLS)};
 
@@ -1657,12 +1666,9 @@ window.addEventListener('message',({data})=>{
     else if(data.available){
       document.getElementById('ver-avail').textContent=data.available;
       document.getElementById('last-check').textContent=new Date().toLocaleString([],{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
-      // Compare semver: only show Install Update if PyPI version is NEWER than installed
-      const instEl=document.querySelector('.ver-val');
-      const installed=(instEl&&instEl.textContent&&instEl.textContent!=='\u2014')?instEl.textContent.trim():'';
-      // PEP 440-aware comparison — handles .devN, aN, bN, rcN suffixes correctly.
-      // The old semverGt used parseInt which coerced "dev176" to 0, making
-      // 0.3.6.dev176 appear equal to 0.3.6 and suppressing the update banner.
+      // Use INST_VER embedded at page-load — avoids fragile DOM querySelector that
+      // could pick up the wrong .ver-val element after the venv section was added.
+      const installed=INST_VER||document.getElementById('ver-installed')?.textContent?.trim()||'';
       function semverGt(a,b){
         function parseVer(v){
           const m=v.match(/^(\d+)\.(\d+)\.(\d+)(?:\.(dev)(\d+)|a(\d+)|b(\d+)|rc(\d+))?/);

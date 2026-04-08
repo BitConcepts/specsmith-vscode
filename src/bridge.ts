@@ -232,14 +232,14 @@ export class SpecsmithBridge {
       env.SPECSMITH_OLLAMA_NUM_CTX = String(this._ollamaCtx);
     }
 
-    // Prefer project-local venv — completely bypasses PATH resolution and
+    // Prefer global venv — completely bypasses PATH resolution and
     // prevents version conflicts between multiple system installs.
-    const venvBin = getVenvSpecsmith(this._config.projectDir);
+    const venvBin = getVenvSpecsmith();
     const execPath = venvBin
       ? venvBin
       : findSpecsmith(this._execPath, env.PATH ?? '');
     if (venvBin) {
-      this._emit({ type: 'system', message: '\uD83D\uDD12 Using project environment (.specsmith/venv)' });
+      this._emit({ type: 'system', message: '\uD83D\uDD12 Using specsmith environment (~/.specsmith/venv)' });
     } else if (execPath !== this._execPath) {
       this._emit({ type: 'system', message: `Using specsmith at: ${execPath}` });
     }

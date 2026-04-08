@@ -776,12 +776,19 @@ const _TLBL={audit:'Governance audit',validate:'Consistency check',doctor:'Tool 
   req_list:'Requirements',req_gaps:'Coverage gaps',req_trace:'Traceability',
   read_wireframe:'Wireframe',retrieve_context:'Searching index',session_end:'Session end'};
 function _tname(n){return _TLBL[n]||n}
-/* Tool started: compact inline status */
+/* Tool started: compact inline status — show meaningful context for each tool type */
 function addTStart(n,args){
   const d=document.createElement('div');d.className='sl';
   const lbl=_tname(n);
-  const hint=args&&args.fix==='true'?' (auto-fix)':args&&args.path?' — '+String(args.path).split(/[\\/]/).pop():'';
-  d.innerHTML=\`<span style="color:var(--teal)">⏳ \${esc(lbl)}\${esc(hint)}…</span><span class="mts">\${ts()}</span>\`;
+  let hint='';
+  if(n==='run_command'&&args&&args.command){
+    // Show the actual command so the user knows what is running
+    const cmd=String(args.command);
+    hint=' \u2192 '+esc(cmd.length>80?cmd.slice(0,80)+'\u2026':cmd);
+  }else if(args&&args.fix==='true'){hint=' (auto-fix)';}
+  else if(args&&args.path){hint=' \u2014 '+String(args.path).split(/[\\/]/).pop();}
+  else if(args&&args.content&&n==='write_file'){hint=' \u2014 writing';}
+  d.innerHTML=\`<span style="color:var(--teal)">\u23f3 \${lbl}\${hint}\u2026</span><span class="mts">\${ts()}</span>\`;
   C.appendChild(d);sb2()}
 function addT(n,r,e){
   // Treat [exit N] (non-zero subprocess exit) as an error for expandable display
@@ -790,10 +797,16 @@ function addT(n,r,e){
   const d=document.createElement('div');d.className='tb'+(e?' er':'');
   if(e&&r&&r.length>80){
     const summary=extractErrSummary(r);
-    d.innerHTML=\`<div class="thdr">❌ \${esc(lbl)}</div>
+    // Add a Report Bug button for Python-level crashes (Traceback, ImportError, etc.)
+    const isPyCrash=/Traceback \(most recent call last\)|ImportError|ModuleNotFoundError|AttributeError:|TypeError: |RuntimeError:/i.test(r);
+    const rptBtn=isPyCrash
+      ?\`<button onclick="rptTool(this,'\${esc(n)}','\${esc(r.slice(0,2000))}')"
+          style="margin-top:6px;background:var(--red);color:#fff;border:none;border-radius:3px;padding:3px 8px;cursor:pointer;font-size:10px">\uD83D\uDC1B Report Bug</button>\`
+      :'';
+    d.innerHTML=\`<div class="thdr">\u274c \${esc(lbl)}</div>
       <details><summary class="tres" style="cursor:pointer;list-style:none">
         \${esc(summary)}<span style="font-size:9px;margin-left:4px;opacity:.6">(click for details)</span>
-      </summary><pre class="err-detail" style="margin-top:4px;font-size:10px">\${esc(r.slice(0,3000))}\${r.length>3000?'\\n…(truncated)':''}</pre></details>\`;
+      </summary><pre class="err-detail" style="margin-top:4px;font-size:10px">\${esc(r.slice(0,3000))}\${r.length>3000?'\\n\u2026(truncated)':''}</pre>\${rptBtn}</details>\`;
   }else if(e){
     d.innerHTML=\`<div class="thdr">❌ \${esc(lbl)}</div><div class="tres">\${esc((r||'').slice(0,200))}</div>\`;
   }else{
@@ -845,6 +858,12 @@ function addToolCrash(data){
         style="background:none;border:1px solid var(--br);border-radius:4px;padding:4px 10px;cursor:pointer;font-size:11px;color:var(--dim)">Dismiss</button>
     </div>\`;
   C.appendChild(d);sb2();}
+function rptTool(btn,toolName,output){
+  const title='[specsmith] '+toolName+' tool crashed';
+  const detail='**Tool:** '+toolName+'\\n**Error output:**\\n'+output.slice(0,2000);
+  if(!confirm('Report this tool error to GitHub (BitConcepts/specsmith)?\\n\\nData sent:\\n\u2022 Tool name and error output\\n\\nNo personal data is included. Proceed?'))return;
+  vscode.postMessage({command:'reportBug',bugTitle:title.slice(0,100),bugDetail:detail.slice(0,3000)});
+  btn.textContent='\u2713 Reported';btn.disabled=true;}
 function rptCrash(btn,title,detail,repo){
   if(!confirm('Report this bug to GitHub (BitConcepts/'+repo+')?\\n\\nData sent:\\n• Tool name + error message\\n• specsmith version, Python version, OS\\n• Error detail text\\n\\nNo personal data is included. You can review the full report before it is filed.\\n\\nProceed?'))return;
   vscode.postMessage({command:'reportBug',bugTitle:'['+repo+'] '+title.slice(0,100),bugDetail:detail.slice(0,3000)});
