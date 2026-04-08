@@ -17,6 +17,7 @@ import { showGovernancePanel, closeGovernancePanel } from './GovernancePanel';
 import { fetchModels } from './ModelRegistry';
 import { OllamaManager, TASK_SUGGESTIONS } from './OllamaManager';
 import { SessionStatus } from './types';
+import { promptAndReportBug } from './BugReporter';
 
 // ── Activation ────────────────────────────────────────────────────────────────
 
@@ -144,35 +145,161 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     vscode.commands.registerCommand('specsmith.createProject', async () => {
-      const name = await vscode.window.showInputBox({ prompt: 'New project name', placeHolder: 'my-project' });
+      // ── Step 1: project name ──────────────────────────────────────────────
+      const name = await vscode.window.showInputBox({
+        prompt: 'New project name',
+        placeHolder: 'my-project',
+        validateInput: (v) => v.trim() ? undefined : 'Name cannot be empty',
+      });
       if (!name) { return; }
+
+      // ── Step 2: project type ──────────────────────────────────────────────
+      const TYPE_CHOICES: vscode.QuickPickItem[] = [
+        { label: 'cli-python',         description: 'Python CLI application' },
+        { label: 'library-python',     description: 'Python library / package' },
+        { label: 'web-frontend',       description: 'Web front-end (JS/TS)' },
+        { label: 'fullstack-js',       description: 'Full-stack JavaScript' },
+        { label: 'backend-frontend',   description: 'Python backend + web frontend' },
+        { label: 'api-specification',  description: 'REST / GraphQL API spec' },
+        { label: 'spec-document',      description: 'Technical specification document' },
+        { label: 'fpga-rtl',           description: 'FPGA / RTL hardware project' },
+        { label: 'embedded-c',         description: 'Embedded C / C++ firmware' },
+        { label: 'yocto-linux',        description: 'Yocto / OpenEmbedded Linux' },
+        { label: 'monorepo',           description: 'Monorepo (multiple packages)' },
+        { label: 'epistemic-pipeline', description: 'AEE epistemic pipeline' },
+        { label: 'knowledge-engineering', description: 'Knowledge engineering / ontology' },
+      ];
+      const typePick = await vscode.window.showQuickPick(TYPE_CHOICES, {
+        placeHolder: 'Select project type',
+        matchOnDescription: true,
+      });
+      if (!typePick) { return; }
+
+      // ── Step 3: VCS platform ─────────────────────────────────────────────
+      const vcsPick = await vscode.window.showQuickPick(
+        [
+          { label: 'github',    description: 'GitHub' },
+          { label: 'gitlab',    description: 'GitLab' },
+          { label: 'bitbucket', description: 'Bitbucket' },
+          { label: '',          description: 'None / other' },
+        ],
+        { placeHolder: 'VCS platform (for CI/CD templates)' },
+      );
+      if (!vcsPick) { return; }
+
+      // ── Step 4: output directory ──────────────────────────────────────────
       const uri = await vscode.window.showOpenDialog({
         canSelectFolders: true, canSelectFiles: false, canSelectMany: false,
         openLabel: 'Create project here',
       });
       if (!uri?.[0]) { return; }
+
       const cfg  = vscode.workspace.getConfiguration('specsmith');
       const exec = cfg.get<string>('executablePath', 'specsmith');
-      const term = vscode.window.createTerminal('specsmith init');
-      term.sendText(`${exec} init --name "${name}" --project-dir "${uri[0].fsPath}"`);
+      const projectDir = uri[0].fsPath;
+
+      // ── Step 5: confirm ───────────────────────────────────────────────────
+      const preview = [
+        `Name:     ${name}`,
+        `Type:     ${typePick.label} — ${typePick.description}`,
+        `VCS:      ${vcsPick.label || 'none'}`,
+        `Location: ${projectDir}`,
+      ].join('\n');
+      const go = await vscode.window.showInformationMessage(
+        `Create specsmith project?\n\n${preview}`,
+        { modal: true },
+        'Create',
+      );
+      if (go !== 'Create') { return; }
+
+      // ── Step 6: run specsmith init via terminal ───────────────────────────
+      // specsmith init is interactive; use terminal so user can answer prompts.
+      // Pre-fill name in env so the CLI can potentially pick it up, but the
+      // user will confirm all options interactively in the terminal.
+      const term = vscode.window.createTerminal({ name: 'specsmith init', shellPath: _shellPath() });
+      // Use --config if a scaffold.yml exists with the right options, otherwise
+      // fall back to interactive init with name/type/vcs pre-filled as defaults.
+      term.sendText(
+        `${exec} init --output-dir "${projectDir}"`,
+      );
       term.show();
-      projectTree.addProject(uri[0].fsPath);
+      projectTree.addProject(projectDir);
+
+      // Offer to open a session once init is done
+      void vscode.window.showInformationMessage(
+        `specsmith init running in terminal. Open a session when it's done?`,
+        'Open Session',
+      ).then((a) => {
+        if (a === 'Open Session') { void openSession(projectDir); }
+      });
     }),
   );
 
   context.subscriptions.push(
     vscode.commands.registerCommand('specsmith.importProject', async () => {
+      // ── Step 1: pick folder ───────────────────────────────────────────────
       const uri = await vscode.window.showOpenDialog({
         canSelectFolders: true, canSelectFiles: false, canSelectMany: false,
         openLabel: 'Import this project',
       });
       if (!uri?.[0]) { return; }
+
       const cfg  = vscode.workspace.getConfiguration('specsmith');
       const exec = cfg.get<string>('executablePath', 'specsmith');
-      const term = vscode.window.createTerminal('specsmith import');
-      term.sendText(`${exec} import --project-dir "${uri[0].fsPath}"`);
+      const projectDir = uri[0].fsPath;
+
+      // ── Step 2: pre-scan via specsmith scan ──────────────────────────────
+      let scanSummary = '';
+      try {
+        const { execSync } = require('child_process') as typeof import('child_process');
+        const result = execSync(
+          `"${exec}" scan --project-dir "${projectDir}" --json`,
+          { timeout: 15000, encoding: 'utf8' },
+        ) as string;
+        const scan = JSON.parse(result);
+        scanSummary = [
+          `Name:     ${scan.name ?? path.basename(projectDir)}`,
+          `Type:     ${scan.type_label ?? scan.type ?? 'unknown'}`,
+          `Language: ${(scan.languages ?? []).slice(0, 3).join(', ') || 'unknown'}`,
+          `VCS:      ${scan.vcs_platform ?? 'unknown'}`,
+        ].join('\n');
+      } catch {
+        scanSummary = `Location: ${projectDir}\n(Could not pre-scan project — will detect on import.)`;
+      }
+
+      // ── Step 3: confirm ───────────────────────────────────────────────────
+      const mode = await vscode.window.showQuickPick(
+        [
+          { label: 'Standard import', description: 'Generate governance overlay only, keep existing code' },
+          { label: 'Guided import',   description: 'Also run architecture interview after import' },
+          { label: 'Dry run',         description: 'Preview what will be created without writing files' },
+        ],
+        { placeHolder: `Importing: ${path.basename(projectDir)}\n${scanSummary}` },
+      );
+      if (!mode) { return; }
+
+      const guided = mode.label === 'Guided import';
+      const dryRun = mode.label === 'Dry run';
+
+      // ── Step 4: run specsmith import in terminal (auto-yes in non-dry mode) ─
+      const flags = [
+        dryRun  ? '--dry-run' : '--yes',
+        guided  ? '--guided'  : '',
+      ].filter(Boolean).join(' ');
+
+      const term = vscode.window.createTerminal({ name: 'specsmith import', shellPath: _shellPath() });
+      term.sendText(`${exec} import --project-dir "${projectDir}" ${flags}`);
       term.show();
-      projectTree.addProject(uri[0].fsPath);
+      projectTree.addProject(projectDir);
+
+      if (!dryRun) {
+        void vscode.window.showInformationMessage(
+          'specsmith import running. Open a session when done?',
+          'Open Session',
+        ).then((a) => {
+          if (a === 'Open Session') { void openSession(projectDir); }
+        });
+      }
     }),
   );
 
@@ -562,6 +689,24 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     vscode.commands.registerCommand('specsmith.showHelp', () => showHelp(context)),
+  );
+
+  // ── Commands: Bug reporter ───────────────────────────────────────
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      'specsmith.reportBug',
+      (prefillTitle?: string, prefillDetail?: string) => {
+        const version = _probeVersion(
+          vscode.workspace.getConfiguration('specsmith').get<string>('executablePath', 'specsmith') ?? 'specsmith',
+        ) ?? undefined;
+        void promptAndReportBug({
+          prefillTitle:   prefillTitle,
+          prefillDetail:  prefillDetail,
+          specsmithVersion: version,
+        });
+      },
+    ),
   );
 
   // ── Workspace folder sync ────────────────────────────────────────────────

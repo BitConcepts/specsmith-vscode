@@ -84,7 +84,8 @@ export interface WebviewMessage {
     | 'clearHistory'   // webview → host: clear files + agent context + display
     | 'copyAll'        // webview → host: (handled entirely client-side, no-op here)
     | 'downloadModel' // webview → host: user selected a dl: prefixed model
-    | 'showHelp';     // webview → host: open help panel
+    | 'showHelp'     // webview → host: open help panel
+    | 'reportBug';   // webview → host: user clicked Report Bug on an error
   text?: string;
   provider?: string;
   model?: string;
@@ -92,6 +93,9 @@ export interface WebviewMessage {
   markdown?: string;
   // openFile
   filePath?: string;
+  // reportBug
+  bugTitle?: string;
+  bugDetail?: string;
 }
 
 /** Session lifecycle status — drives the status icon in the Sessions tree. */

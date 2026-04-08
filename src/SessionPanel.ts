@@ -404,6 +404,14 @@ export class SessionPanel implements vscode.Disposable {
       case 'showHelp':
         void vscode.commands.executeCommand('specsmith.showHelp');
         break;
+
+      case 'reportBug':
+        void vscode.commands.executeCommand(
+          'specsmith.reportBug',
+          msg.bugTitle ?? 'specsmith-vscode bug',
+          msg.bugDetail ?? '',
+        );
+        break;
     }
   }
 
@@ -747,12 +755,18 @@ function smartErr(m){
 function addE(m){
   const{short,long}=smartErr(m||'?');
   const d=document.createElement('div');d.className='el';
+  const bugBtn=\`<button class="ab" title="Report this bug" style="margin-top:4px;font-size:10px;color:var(--dim)" onclick="rptBug(this)">🐛 Report</button>\`;
   if(long){
-    d.innerHTML=\`<details><summary>\u26a0 \${esc(short)}</summary><pre class="err-detail">\${esc(long)}</pre></details>\`;
+    d.innerHTML=\`<details><summary>\u26a0 \${esc(short)}</summary><pre class="err-detail">\${esc(long)}</pre></details>\${bugBtn}\`;
   }else{
-    d.textContent='\u26a0 '+short;
+    d.innerHTML=\`<span>\u26a0 \${esc(short)}</span>\${bugBtn}\`;
   }
+  d.dataset.errTitle=short;
+  d.dataset.errDetail=long||'';
   C.appendChild(d);sb2()}
+function rptBug(btn){const el=btn.closest('.el');const t=el?.dataset.errTitle||'specsmith error';const det=el?.dataset.errDetail||'';
+  vscode.postMessage({command:'reportBug',bugTitle:'[specsmith-vscode] '+t.slice(0,100),bugDetail:det.slice(0,3000)});
+  btn.textContent='✓ Reported';btn.disabled=true;}
 function addImg(u,l){const d=document.createElement('div');d.className='mu';
   d.innerHTML=\`<div class="bbl"><div style="font-size:11px;color:var(--dim);margin-bottom:4px">📎 \${esc(l)}</div>
   <img class="iprev" src="\${u}" alt="\${esc(l)}"></div><div class="mt">\${ts()}</div>\`;
