@@ -11,6 +11,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { augmentedEnv, findSpecsmith } from './bridge';
+import { getVenvSpecsmithVersion, buildCreateVenvCommands, buildUpdateVenvCommand, buildDeleteVenvCommands, ensureGitignored } from './VenvManager';
 
 let _panel: vscode.WebviewPanel | undefined;
 let _ctx: vscode.ExtensionContext | undefined;
@@ -106,6 +107,7 @@ interface ProjectData {
   installedVersion: string | null; availableVersion: string | null; lastUpdateCheck: string | null;
   phase: AEEPhaseInfo;
   releaseChannel: string;  // 'stable' | 'pre-release'
+  venvVersion: string | null;  // specsmith version in .specsmith/venv, or null if no venv
 }
 interface GovMsg {
   command:
@@ -115,7 +117,8 @@ interface GovMsg {
     | 'getOllamaModels' | 'ollamaRemoveModel' | 'ollamaUpdateModel' | 'ollamaUpdateAll'
     | 'checkOllamaVersion' | 'ollamaUpgrade' | 'scanProject'
     | 'saveExecution' | 'scanTools' | 'toolInstall'
-    | 'reloadWindow' | 'detectTools' | 'detectDisciplines' | 'setReleaseChannel';
+    | 'reloadWindow' | 'detectTools' | 'detectDisciplines' | 'setReleaseChannel'
+    | 'createVenv' | 'updateVenv' | 'deleteVenv' | 'rebuildVenv';
   scaffold?: ScaffoldData; cmd?: string; prompt?: string; file?: string; addType?: string;
   phaseKey?: string; modelId?: string;
   profileName?: string; customAllowed?: string; customBlocked?: string; customBlockedTools?: string;
@@ -340,7 +343,10 @@ function _loadProjectData(projectDir: string, context: vscode.ExtensionContext):
   // Release channel from VS Code settings
   const releaseChannel = vscode.workspace.getConfiguration('specsmith').get<string>('releaseChannel', 'stable');
 
-  return { projectDir, scaffold, govFiles, installedVersion, availableVersion: avail || null, lastUpdateCheck: lastCheck, phase, releaseChannel };
+  // Project-local venv version (null if no venv)
+  const venvVersion = getVenvSpecsmithVersion(projectDir);
+
+  return { projectDir, scaffold, govFiles, installedVersion, availableVersion: avail || null, lastUpdateCheck: lastCheck, phase, releaseChannel, venvVersion };
 }
 
 // ── Message handler ────────────────────────────────────────────────────────────
@@ -502,6 +508,96 @@ async function _handleMsg(msg: GovMsg): Promise<void> {
     case 'detectTools':
       void _runDetectTools();
       break;
+
+    case 'createVenv': {
+      const ch2 = vscode.workspace.getConfiguration('specsmith').get<string>('releaseChannel', 'stable') as 'stable' | 'pre-release';
+      const { ApiKeyManager } = await import('./ApiKeyManager');
+      // Detect which providers have API keys set and install their packages
+      const providerPkgMap: Record<string, string> = {
+        anthropic: 'anthropic', openai: 'openai',
+        gemini: 'google-generativeai', mistral: 'mistralai',
+      };
+      const providers: string[] = [];
+      for (const [prov, pkg] of Object.entries(providerPkgMap)) {
+        const key = await ApiKeyManager.getKey(_ctx.secrets, prov);
+        if (key) { providers.push(pkg); }
+      }
+      const cmds = buildCreateVenvCommands(_projectDir, ch2, providers);
+      const term = vscode.window.createTerminal({ name: 'specsmith venv', cwd: _projectDir, shellPath: _shellPath() });
+      // Join with && so later steps only run if earlier ones succeed
+      term.sendText(cmds.join(' && '));
+      term.show();
+      ensureGitignored(_projectDir);
+      void vscode.window.showInformationMessage(
+        'Creating project environment in terminal. Reload the window when done.',
+        'Reload Now',
+      ).then((a) => {
+        if (a === 'Reload Now') { void vscode.commands.executeCommand('workbench.action.reloadWindow'); }
+      });
+      break;
+    }
+
+    case 'updateVenv': {
+      const ch3 = vscode.workspace.getConfiguration('specsmith').get<string>('releaseChannel', 'stable') as 'stable' | 'pre-release';
+      const term2 = vscode.window.createTerminal({ name: 'specsmith venv update', cwd: _projectDir, shellPath: _shellPath() });
+      term2.sendText(buildUpdateVenvCommand(_projectDir, ch3));
+      term2.show();
+      _panel?.webview.postMessage({ type: 'installStarted' });
+      break;
+    }
+
+    case 'deleteVenv': {
+      const confirm = await vscode.window.showWarningMessage(
+        'Delete the project environment (.specsmith/venv)?  This removes the isolated specsmith install for this project.',
+        { modal: true },
+        'Delete',
+      );
+      if (confirm !== 'Delete') { break; }
+      const delCmds = buildDeleteVenvCommands(_projectDir);
+      const delTerm = vscode.window.createTerminal({ name: 'specsmith venv delete', cwd: _projectDir, shellPath: _shellPath() });
+      delTerm.sendText(delCmds.join(' ; '));
+      delTerm.show();
+      void vscode.window.showInformationMessage(
+        'Project environment deleted. Reload the window to reflect the change.',
+        'Reload Now',
+      ).then((a) => {
+        if (a === 'Reload Now') { void vscode.commands.executeCommand('workbench.action.reloadWindow'); }
+      });
+      break;
+    }
+
+    case 'rebuildVenv': {
+      const confirmRb = await vscode.window.showWarningMessage(
+        'Rebuild the project environment?  This will delete .specsmith/venv and reinstall specsmith from scratch.',
+        { modal: true },
+        'Rebuild',
+      );
+      if (confirmRb !== 'Rebuild') { break; }
+      const chRb = vscode.workspace.getConfiguration('specsmith').get<string>('releaseChannel', 'stable') as 'stable' | 'pre-release';
+      const { ApiKeyManager: AKM2 } = await import('./ApiKeyManager');
+      const providerPkgMapRb: Record<string, string> = {
+        anthropic: 'anthropic', openai: 'openai',
+        gemini: 'google-generativeai', mistral: 'mistralai',
+      };
+      const providersRb: string[] = [];
+      for (const [prov, pkg] of Object.entries(providerPkgMapRb)) {
+        const key = await AKM2.getKey(_ctx.secrets, prov);
+        if (key) { providersRb.push(pkg); }
+      }
+      const delCmdsRb  = buildDeleteVenvCommands(_projectDir);
+      const createCmds = buildCreateVenvCommands(_projectDir, chRb, providersRb);
+      const rbTerm = vscode.window.createTerminal({ name: 'specsmith venv rebuild', cwd: _projectDir, shellPath: _shellPath() });
+      rbTerm.sendText([...delCmdsRb, ...createCmds].join(' && '));
+      rbTerm.show();
+      ensureGitignored(_projectDir);
+      void vscode.window.showInformationMessage(
+        'Rebuilding project environment in terminal. Reload the window when done.',
+        'Reload Now',
+      ).then((a) => {
+        if (a === 'Reload Now') { void vscode.commands.executeCommand('workbench.action.reloadWindow'); }
+      });
+      break;
+    }
 
     case 'setReleaseChannel': {
       if (!msg.channel) { break; }
@@ -1344,7 +1440,23 @@ ${upd ? `<div class="upd-banner">⬆ specsmith <b>${data.availableVersion}</b> a
   <button class="btn" id="chk-btn" onclick="chkVer()">🔍 Check for Updates</button>
   ${upd ? '<button class="btn btn-upd" onclick="installUpd()">⬆ Install Update</button>' : ''}
 </div>
-<h3 style="margin-top:16px">Ollama</h3>
+<h3 style="margin-top:16px">Project Environment (.specsmith/venv)</h3>
+<div class="info-box" style="font-size:11px">A project-local venv isolates specsmith from system PATH, preventing version conflicts when multiple installs exist. The session panel uses it automatically when present.</div>
+<div class="ver-grid">
+  <span class="ver-lbl">Status</span>
+  <span class="ver-val" style="color:${data.venvVersion ? 'var(--grn)' : 'var(--dim)'}">${data.venvVersion ? '\u2713 Active' : '\u2014 Not created'}</span>
+  ${data.venvVersion ? `<span class="ver-lbl">Version</span><span class="ver-val">${data.venvVersion}</span>` : ''}
+  <span class="ver-lbl">Location</span><span class="ver-lbl">.specsmith/venv/</span>
+</div>
+<div class="btn-row" style="margin-bottom:14px">
+  ${data.venvVersion
+    ? `<button class="btn-sm" onclick="updateVenv()">\u2b06 Update</button>
+       <button class="btn-sm" onclick="rebuildVenv()" title="Delete and recreate the project environment from scratch">\uD83D\uDD04 Rebuild</button>
+       <button class="btn-sm" style="color:var(--red);border-color:var(--red)" onclick="deleteVenv()" title="Remove .specsmith/venv">\uD83D\uDDD1 Delete</button>`
+    : `<button class="btn btn-upd" onclick="createVenv()">\uD83D\uDD12 Create Project Environment</button>`
+  }
+</div>
+<h3 style="margin-top:4px">Ollama</h3>
 <div class="ver-grid">
   <span class="ver-lbl">Installed</span><span class="ver-val" id="ollama-ver">—</span>
   <span class="ver-lbl">Available</span><span class="ver-val" id="ollama-latest">—</span>
@@ -1522,6 +1634,10 @@ function chkOllamaVer(){
   vscode.postMessage({command:'checkOllamaVersion'});
 }
 function ollamaUpgrade(){vscode.postMessage({command:'ollamaUpgrade'})}
+function createVenv(){vscode.postMessage({command:'createVenv'})}
+function updateVenv(){vscode.postMessage({command:'updateVenv'})}
+function deleteVenv(){vscode.postMessage({command:'deleteVenv'})}
+function rebuildVenv(){vscode.postMessage({command:'rebuildVenv'})}
 function filt(inp,name){
   const q=inp.value.toLowerCase();
   document.querySelectorAll('input[name='+name+']').forEach(cb=>{

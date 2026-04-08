@@ -15,6 +15,7 @@ import * as os from 'os';
 import * as path from 'path';
 import * as readline from 'readline';
 import { SpecsmithEvent, SessionConfig, SessionStatus } from './types';
+import { getVenvSpecsmith } from './VenvManager';
 
 /**
  * Return an env object that guarantees known pipx/pip bin directories are on
@@ -231,9 +232,15 @@ export class SpecsmithBridge {
       env.SPECSMITH_OLLAMA_NUM_CTX = String(this._ollamaCtx);
     }
 
-    // Find the best specsmith executable (version >= 0.3.1 with --json-events)
-    const execPath = findSpecsmith(this._execPath, env.PATH ?? '');
-    if (execPath !== this._execPath) {
+    // Prefer project-local venv — completely bypasses PATH resolution and
+    // prevents version conflicts between multiple system installs.
+    const venvBin = getVenvSpecsmith(this._config.projectDir);
+    const execPath = venvBin
+      ? venvBin
+      : findSpecsmith(this._execPath, env.PATH ?? '');
+    if (venvBin) {
+      this._emit({ type: 'system', message: '\uD83D\uDD12 Using project environment (.specsmith/venv)' });
+    } else if (execPath !== this._execPath) {
       this._emit({ type: 'system', message: `Using specsmith at: ${execPath}` });
     }
 
