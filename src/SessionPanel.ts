@@ -445,6 +445,10 @@ export class SessionPanel implements vscode.Disposable {
         void vscode.commands.executeCommand('specsmith.reportIssue');
         break;
 
+      case 'showSettings':
+        void vscode.commands.executeCommand('specsmith.showSettings');
+        break;
+
       case 'installOrUpgrade':
         void vscode.commands.executeCommand('specsmith.installOrUpgrade');
         break;
@@ -691,7 +695,8 @@ export class SessionPanel implements vscode.Disposable {
   <button class="hbtn" title="Export chat as markdown" onclick="exportChat()">⬇</button>
   <button class="hbtn" title="Report an issue or suggest a feature" onclick="vscode.postMessage({command:'reportIssue'})">📝</button>
   <button class="hbtn" title="Install / Upgrade specsmith" onclick="vscode.postMessage({command:'installOrUpgrade'})">⬆</button>
-  <button class="hbtn" title="Help (keyboard shortcuts, commands, usage)" onclick="vscode.postMessage({command:'showHelp'})">\u2753</button>
+  <button class="hbtn" title="Settings (venv, Ollama, version check)" onclick="vscode.postMessage({command:'showSettings'})">⚙</button>
+  <button class="hbtn" title="Help (keyboard shortcuts, commands, usage)" onclick="vscode.postMessage({command:'showHelp'})">❓</button>
 </div>
 <div id="chat"></div>
 <div id="rh" title="Drag · Dbl-click collapse"></div>

@@ -94,9 +94,10 @@ export interface WebviewMessage {
     | 'clearHistory'   // webview → host: clear files + agent context + display
     | 'copyAll'        // webview → host: (handled entirely client-side, no-op here)
     | 'downloadModel' // webview → host: user selected a dl: prefixed model
-    | 'showHelp'     // webview → host: open help panel
-    | 'reportBug'   // webview → host: user clicked Report Bug on an error
-    | 'reportIssue' // webview → host: user wants to file an issue/suggestion
+    | 'showHelp'         // webview → host: open help panel
+    | 'showSettings'     // webview → host: open global Settings panel
+    | 'reportBug'        // webview → host: user clicked Report Bug on an error
+    | 'reportIssue'      // webview → host: user wants to file an issue/suggestion
     | 'installOrUpgrade'; // webview → host: user wants to install/upgrade specsmith
   text?: string;
   provider?: string;

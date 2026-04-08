@@ -1031,9 +1031,12 @@ async function _checkForSpecsmithUpdate(context: vscode.ExtensionContext): Promi
 }
 
 /**
- * Auto-open the Settings panel when VS Code starts with a workspace.
+ * Auto-open the Settings panel when VS Code starts.
  * Opens Beside the editor after a short delay so it doesn't block activation.
  * Respects a user setting to disable: specsmith.autoOpenGovernancePanel = false.
+ *
+ * The global Settings panel always opens (even without a project).
+ * The Project Settings panel only opens when a project folder is available.
  */
 async function _autoOpenGovernancePanel(
   context: vscode.ExtensionContext,
@@ -1045,22 +1048,25 @@ async function _autoOpenGovernancePanel(
   // Wait for VS Code to finish painting before we do anything
   await new Promise((r) => setTimeout(r, 1500));
 
+  // Focus the specsmith sidebar first so the user sees it
+  void vscode.commands.executeCommand('workbench.view.extension.specsmith');
+
+  // Global Settings always opens — no project required
+  showSettingsPanel(context);
+
+  // Project Settings only when a project folder is available
   const workspaceDir =
     SessionPanel.current()?.projectDir
     ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 
-  if (!workspaceDir) { return; }
-
-  // Focus the specsmith sidebar first so the user sees it
-  void vscode.commands.executeCommand('workbench.view.extension.specsmith');
-
-  showSettingsPanel(context);
-  showGovernancePanel(
-    context,
-    workspaceDir,
-    (text) => SessionPanel.current()?.sendCommand(text),
-    async () => { await openSession(workspaceDir); },
-  );
+  if (workspaceDir) {
+    showGovernancePanel(
+      context,
+      workspaceDir,
+      (text) => SessionPanel.current()?.sendCommand(text),
+      async () => { await openSession(workspaceDir); },
+    );
+  }
 }
 
 /** Silently warm the model cache at extension startup for all configured providers. */
@@ -1111,7 +1117,8 @@ async function _ensureVenv(context: vscode.ExtensionContext): Promise<boolean> {
 
   const cmds = buildCreateVenvCommands(channel, providers);
   const term = vscode.window.createTerminal({ name: 'specsmith: create environment', shellPath: _shellPath() });
-  term.sendText(cmds.join(' && '));
+  // Join with ; — works in both powershell.exe (PS5) and pwsh (PS7)
+  term.sendText(cmds.join('; '));
   term.show();
   void vscode.window.showInformationMessage(
     'Creating specsmith environment in terminal. Reload VS Code when done, then open your session.',
@@ -1144,9 +1151,9 @@ async function _notifyIfVenvMissing(context: vscode.ExtensionContext): Promise<v
     'Later',
   );
   if (action === 'Create Environment') {
-    void vscode.commands.executeCommand('specsmith.newSession'); // triggers _ensureVenv prompt
+    void vscode.commands.executeCommand('specsmith.showSettings'); // Settings panel has the Create button
   } else if (action === 'Open Settings') {
-    void vscode.commands.executeCommand('specsmith.showGovernance');
+    void vscode.commands.executeCommand('specsmith.showSettings');
   }
 }
 

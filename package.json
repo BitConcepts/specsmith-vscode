@@ -46,8 +46,9 @@
       { "command": "specsmith.addRequirement",        "title": "Quick Add Requirement",       "category": "specsmith", "icon": "$(add)" },
       { "command": "specsmith.navigateRequirements",  "title": "Navigate Requirements",       "category": "specsmith", "icon": "$(list-unordered)" },
       { "command": "specsmith.openScaffold",          "title": "Open Scaffolding File",       "category": "specsmith", "icon": "$(settings-gear)" },
+      { "command": "specsmith.showSettings",         "title": "Settings",                    "category": "specsmith", "icon": "$(gear)" },
       { "command": "specsmith.showHelp",              "title": "Show Help",                   "category": "specsmith", "icon": "$(question)" },
-      { "command": "specsmith.showGovernance",        "title": "Open Settings Panel",          "category": "specsmith", "icon": "$(settings-gear)" },
+      { "command": "specsmith.showGovernance",        "title": "Open Project Settings",        "category": "specsmith", "icon": "$(settings-gear)" },
       { "command": "specsmith.installOrUpgrade",      "title": "Install or Upgrade specsmith", "category": "specsmith", "icon": "$(cloud-download)" },
       { "command": "specsmith.clearHistory",          "title": "Clear Chat History (current session)",   "category": "specsmith", "icon": "$(clear-all)" },
       { "command": "specsmith.clearAllHistory",       "title": "Clear Chat History (all sessions)",      "category": "specsmith", "icon": "$(clear-all)" },
@@ -59,9 +60,11 @@
     "menus": {
       "view/title": [
         { "command": "specsmith.newSession",      "when": "view == specsmith.sessions",  "group": "navigation" },
-      { "command": "specsmith.showHelp",        "when": "view == specsmith.sessions",  "group": "navigation" },
-        { "command": "specsmith.showGovernance", "when": "view == specsmith.sessions",  "group": "navigation" },
-        { "command": "specsmith.showGovernance", "when": "view == specsmith.projects",  "group": "navigation" },
+        { "command": "specsmith.showSettings",    "when": "view == specsmith.sessions",  "group": "navigation" },
+        { "command": "specsmith.showHelp",        "when": "view == specsmith.sessions",  "group": "navigation" },
+        { "command": "specsmith.showGovernance",  "when": "view == specsmith.sessions",  "group": "navigation" },
+        { "command": "specsmith.showSettings",    "when": "view == specsmith.projects",  "group": "navigation" },
+        { "command": "specsmith.showGovernance",  "when": "view == specsmith.projects",  "group": "navigation" },
         { "command": "specsmith.openProject",     "when": "view == specsmith.projects",  "group": "navigation" },
         { "command": "specsmith.createProject",   "when": "view == specsmith.projects",  "group": "navigation" },
         { "command": "specsmith.importProject",   "when": "view == specsmith.projects",  "group": "navigation" },
@@ -82,6 +85,7 @@
     },
     "keybindings": [
       { "command": "specsmith.newSession",           "key": "ctrl+shift+;",  "mac": "cmd+shift+;" },
+      { "command": "specsmith.showSettings",        "key": "ctrl+shift+,",  "mac": "cmd+shift+," },
       { "command": "specsmith.showGovernance",       "key": "ctrl+shift+g",  "mac": "cmd+shift+g" },
       { "command": "specsmith.addRequirement",       "key": "ctrl+shift+r",  "mac": "cmd+shift+r" },
       { "command": "specsmith.navigateRequirements", "key": "ctrl+shift+q",  "mac": "cmd+shift+q" },
@@ -117,7 +121,7 @@
         "specsmith.autoOpenGovernancePanel": {
           "type": "boolean",
           "default": true,
-          "description": "Automatically open the Settings panel when VS Code starts with a workspace folder. The Settings panel also opens automatically whenever a new agent session is started."
+          "description": "Automatically open the Settings and Project Settings panels when VS Code starts. Settings (global: venv, Ollama, version) always opens. Project Settings (project scaffold, tools, files) opens when a workspace folder is available."
         },
         "specsmith.ollamaContextLength": {
           "type": "number",
