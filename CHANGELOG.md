@@ -2,6 +2,72 @@
 
 All notable changes to the VS Code extension are documented here.
 
+## [0.3.4] — 2026-04-09
+
+### Added
+- **Dual-panel architecture** — single-panel "Settings" split into two distinct panels:
+  - **⚙ specsmith Settings** (`Ctrl+Shift+,`) — global, project-independent: environment
+    management, specsmith version/updates, Ollama models and version, system info. Opens
+    automatically on VS Code startup regardless of whether a project is open.
+  - **⚙ Project Settings** (`Ctrl+Shift+G`) — per-project: scaffold.yml editor, FPGA/HDL
+    tools, governance files, quick actions, execution profiles. Requires a project to be open.
+  - Both panels open as tabs in the same editor column (ViewColumn.Two).
+- **Global specsmith environment** (`~/.specsmith/venv/`) — replaces per-project `.specsmith/venv/`.
+  Environment management in specsmith Settings > Environment tab:
+  - **Create Environment** — creates `~/.specsmith/venv/`, installs specsmith + detected
+    provider packages. Required before any session can start.
+  - **Update** / **Rebuild** / **Delete** — with confirmation dialogs for destructive ops.
+  - **Remove System Installs** — removes pipx/pip specsmith installs, leaving only the venv.
+  - **Persistent restart banner** replaces transient popups — stays visible with a
+    **↺ Restart VS Code** button until the user restarts or dismisses.
+  - Venv enforcement: `openSession()` blocks if the environment is not present.
+  - Startup notification when environment is missing (throttled, with Create button).
+- **`specsmith.envPath` setting** — override the default `~/.specsmith/venv/` location.
+- **VCS state at session start** — `git status` + `git log --oneline -5` run in the project
+  directory when a session becomes ready; displayed as a system message in the chat. The agent
+  also receives a VCS snapshot in its system prompt.
+- **Tool command display** — `run_command` tool events now show the actual command text:
+  `⏳ Running command → git status…` instead of just `Running command…`.
+- **Bug report button on Python crashes** — tool error cards that contain a Python exception
+  (Traceback, ImportError, etc.) now show a red 🐛 Report Bug button.
+- **`specsmith.showSettings` command** — opens the global Settings panel from Ctrl+Shift+P
+  or from the Sessions/Projects sidebar gear icon.
+- **Session topbar ⚙ button** — opens the global Settings panel directly from the chat view.
+
+### Changed
+- All specsmith CLI invocations in Project Settings terminals now prefer the global venv binary
+  (`~/.specsmith/venv/Scripts/specsmith.exe`) over the system PATH, with `& ` call operator
+  prefix for PowerShell compatibility. CWD is always set to the project directory.
+- **PowerShell compatibility** throughout:
+  - `_shellPath()` returns `powershell.exe` (not `ComSpec`/cmd.exe) on Windows.
+  - All venv/env management commands use `& "path"` call operator for quoted executables.
+  - Command chains use `;` (works in PS5 + PS7) not `&&` (PS7-only).
+  - `Write-Host` replaces `echo` for terminal confirmation messages.
+- **specsmith Settings version check auto-triggers** 2 seconds after the panel opens so the
+  update badge is current without manual interaction.
+- **Update flow corrected**: `_checkForSpecsmithUpdate` (background daily check) now writes
+  `specsmith.availableVersion` to globalState so specsmith Settings shows the update on first
+  render.
+- Ollama models management moved from Project Settings (Tools tab) to specsmith Settings
+  (Ollama tab).
+- `specsmith.autoOpenGovernancePanel` description updated to reflect both panels.
+
+### Fixed
+- **`pip.exe install --upgrade pip` fails on Windows** — Windows prevents pip from upgrading
+  itself. Changed to `python.exe -m pip install --upgrade pip` (`& ` prefixed on Windows).
+- **`&&` in PowerShell 5** — all `&&`-chained commands changed to `;`-separated to work in
+  both `powershell.exe` (PS5) and `pwsh` (PS7).
+- **Quoted paths treated as string expressions in PowerShell** — prefixed with `& ` call
+  operator. Previously `"C:\path\exe.exe" -args` produced "Expressions are only allowed as
+  the first element of a pipeline".
+- **Version comparison bug** — `querySelector('.ver-val')` picked up the wrong element after
+  venv section added more `.ver-val` spans. Fixed with `id="ver-installed"` + embedded
+  `INST_VER` JS constant at template render time.
+- **Version update not showing in specsmith Settings** — background update check now saves
+  `specsmith.availableVersion` to globalState; Settings panel auto-checks on open.
+
+---
+
 ## [0.3.3] — 2026-04-07
 
 ### Added
