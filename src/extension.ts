@@ -1030,6 +1030,9 @@ async function _checkForSpecsmithUpdate(context: vscode.ExtensionContext): Promi
     const latest   = pypiData.info?.version;
     if (!latest || latest === current.split(/\s/)[2]) { return; }
 
+    // Save to globalState so SettingsPanel shows the update on first render
+    await context.globalState.update('specsmith.availableVersion', latest);
+
     const ans = await vscode.window.showInformationMessage(
       `specsmith update available: v${latest} (installed: ${current})`,
       'Upgrade Now',

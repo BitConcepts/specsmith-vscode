@@ -31,15 +31,18 @@ export function closeSettingsPanel(): void { _panel?.dispose(); }
 
 export function showSettingsPanel(context: vscode.ExtensionContext): void {
   _ctx = context;
-  if (_panel) { _panel.reveal(vscode.ViewColumn.Beside); _reload(); return; }
+  if (_panel) { _panel.reveal(vscode.ViewColumn.Two); _reload(); return; }
 
   _panel = vscode.window.createWebviewPanel(
     'specsmithSettings',
-    '\u2699 Settings',
-    vscode.ViewColumn.Beside,
+    '\u2699 specsmith Settings',
+    vscode.ViewColumn.Two,
     { enableScripts: true, retainContextWhenHidden: true },
   );
   _reload();
+  // Auto-check for specsmith updates when the panel first opens so the
+  // update badge and version info are current without manual action.
+  setTimeout(() => { if (_ctx && _panel) { void _checkVersion(_ctx); } }, 2000);
   _panel.webview.onDidReceiveMessage((msg: Msg) => void _handleMsg(msg), null, context.subscriptions);
   _panel.onDidDispose(() => { _panel = undefined; _ctx = undefined; }, null, context.subscriptions);
 }
@@ -428,8 +431,9 @@ function _html(data: SettingsData): string {
 <html lang="en"><head>
 <meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';">
+<title>specsmith Settings</title>
 <style>
-  :root{--bg:var(--vscode-editor-background);--fg:var(--vscode-editor-foreground);
+  :root{--bg:var(--vscode-editor-background);
     --sf:var(--vscode-panel-background,#1e1e2e);--br:var(--vscode-panel-border,#313244);
     --ib:var(--vscode-input-background);--if:var(--vscode-input-foreground);
     --bb:var(--vscode-button-background);--bf:var(--vscode-button-foreground);
@@ -482,7 +486,7 @@ function _html(data: SettingsData): string {
 </style></head>
 <body>
 <div class="topbar">
-  <span class="title">\u2699 Settings</span>
+  <span class="title">\u2699 specsmith Settings</span>
   <button class="btn-sm" onclick="refresh()">&#x21BA; Refresh</button>
 </div>
 ${upd ? `<div class="upd-banner">\u2b06 specsmith <b>${data.availableVersion}</b> available (installed <b>${data.installedVersion}</b>) &mdash; <button class="tb" style="border-color:var(--teal);color:var(--teal)" onclick="sw('env')">View Update</button></div>` : ''}
