@@ -1123,6 +1123,7 @@ Profile is stored in <b>scaffold.yml</b> as <code>execution_profile</code>.</div
   <button class="qa-btn" onclick="runCmd('req gaps')">⚠ req gaps</button>
   <button class="qa-btn" onclick="runCmd('tools scan --fpga')">🔧 tools scan</button>
   <button class="qa-btn" onclick="runCmd('phase show')">\uD83D\uDCCA Lifecycle Status</button>
+  <button class="qa-btn" onclick="sendToAgent('I want to report a bug or issue. Look at recent session errors. Help me write a clear bug report and file it to GitHub Issues.')">\uD83D\uDC1B Report Bug</button>
 </div>
 <h3>\uD83E\uDD16 AI-Guided (${_guidedLabel})</h3>
 ${_guidedBtn}

@@ -40,6 +40,14 @@ export function augmentedEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
       path.join(roaming, 'Python', 'Scripts'),             // pip user (older Python)
     );
 
+    // Git: VS Code extension host often doesn't inherit the full PATH.
+    // Add common Git install locations so git commands work in agent sessions.
+    fallback.push(
+      'C:\\Program Files\\Git\\cmd',
+      'C:\\Program Files (x86)\\Git\\cmd',
+      path.join(local, 'Programs', 'Git', 'cmd'),
+    );
+
     // pythoncore-* subdirs as last resort
     try {
       const pyBase = path.join(local, 'Python');
@@ -53,7 +61,19 @@ export function augmentedEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
     } catch { /* ignore */ }
   } else {
     fallback.push(path.join(os.homedir(), '.local', 'bin'), '/usr/local/bin');
+    // Git on macOS via Xcode CLT or Homebrew
+    fallback.push('/usr/bin', '/opt/homebrew/bin');
   }
+
+  // Dynamic: probe for git and add its directory if not already on PATH
+  try {
+    const whichCmd = process.platform === 'win32' ? 'where.exe' : 'which';
+    const r = cp.spawnSync(whichCmd, ['git'], { timeout: 3000, encoding: 'utf8', env: { ...base, PATH: [...(base.PATH?.split(path.delimiter) ?? []), ...fallback].join(path.delimiter) } });
+    if (r.status === 0 && r.stdout.trim()) {
+      const gitDir = path.dirname(r.stdout.trim().split('\n')[0]);
+      if (!fallback.includes(gitDir)) { fallback.push(gitDir); }
+    }
+  } catch { /* git not found — will fail gracefully when agent tries to use it */ }
 
   const current = env.PATH ?? '';
   // Real PATH first — extension finds the same binary as the terminal.
