@@ -53,6 +53,7 @@ export class SessionPanel implements vscode.Disposable {
   private _chatFile: string | undefined;
   private _chatStream: fs.WriteStream | undefined;
   private _availableProviders: string[] = ['ollama'];
+  private _autoAcceptAll = false;
 
   // ── Factory (async — awaits SecretStorage for API keys) ───────────────────
 
@@ -228,11 +229,15 @@ export class SessionPanel implements vscode.Disposable {
         if (t.includes('would you like') || t.includes('shall i proceed') ||
             t.includes('ready to proceed') || t.includes('do you approve') ||
             t.includes('would you like me to')) {
-          // Send a proposal event after the llm_chunk so buttons appear below the text
-          // If auto-accept was previously clicked, just send 'yes' automatically
-          setTimeout(() => {
-            void this._panel.webview.postMessage({ type: 'proposal' } satisfies SpecsmithEvent);
-          }, 100);
+          // If auto-accept was previously set, skip buttons and auto-send yes
+          if (this._autoAcceptAll) {
+            this._bridge.send('yes, proceed');
+            void this._panel.webview.postMessage({ type: 'system', message: '\u2713 Auto-accepted' } satisfies SpecsmithEvent);
+          } else {
+            setTimeout(() => {
+              void this._panel.webview.postMessage({ type: 'proposal' } satisfies SpecsmithEvent);
+            }, 100);
+          }
         }
       }
       void this._panel.webview.postMessage(e);
@@ -508,6 +513,10 @@ export class SessionPanel implements vscode.Disposable {
 
       case 'installOrUpgrade':
         void vscode.commands.executeCommand('specsmith.installOrUpgrade');
+        break;
+
+      case 'setAutoAccept':
+        this._autoAcceptAll = true;
         break;
 
       case 'changeProject': {
@@ -1341,15 +1350,15 @@ window.addEventListener('message',({data})=>{switch(data.type){
     var ab=document.createElement('button');
     ab.textContent='\u2713 Accept';
     ab.style.cssText='background:var(--bb);color:var(--bf);border:none;border-radius:4px;padding:3px 10px;cursor:pointer;font-size:11px;font-weight:600';
-    ab.onclick=function(){pd.remove();vscode.postMessage({command:'send',text:'yes, proceed'});};
+    ab.onclick=function(){pd.remove();setBusy(true);vscode.postMessage({command:'send',text:'yes, proceed'});};
     var rb=document.createElement('button');
     rb.textContent='\u2717 Reject';
     rb.style.cssText='background:none;border:1px solid var(--br);color:var(--dim);border-radius:4px;padding:3px 10px;cursor:pointer;font-size:11px';
-    rb.onclick=function(){pd.remove();vscode.postMessage({command:'send',text:'no, skip this'});};
+    rb.onclick=function(){pd.remove();setBusy(true);vscode.postMessage({command:'send',text:'no, skip this'});};
     var aab=document.createElement('button');
     aab.textContent='\u2713\u2713 Accept All';
     aab.style.cssText='background:rgba(78,201,176,.15);border:1px solid var(--teal);color:var(--teal);border-radius:4px;padding:3px 10px;cursor:pointer;font-size:11px;font-weight:600';
-    aab.onclick=function(){pd.remove();window._ssAutoAccept=true;vscode.postMessage({command:'send',text:'yes, proceed with everything'});};
+    aab.onclick=function(){pd.remove();setBusy(true);vscode.postMessage({command:'setAutoAccept'});vscode.postMessage({command:'send',text:'yes, proceed with everything'});};
     pd.appendChild(ab);pd.appendChild(rb);pd.appendChild(aab);
     C.appendChild(pd);sb2();
     break;}
