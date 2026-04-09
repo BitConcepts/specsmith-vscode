@@ -99,16 +99,16 @@
           "description": "Path to the specsmith CLI. Defaults to 'specsmith' (must be on PATH). If specsmith isn't found, set the full path here."
         },
         "specsmith.defaultProvider": {
-          "type": "string", "default": "anthropic",
-          "enum": ["anthropic","openai","gemini","mistral","ollama"],
+          "type": "string", "default": "ollama",
+          "enum": ["ollama","anthropic","openai","gemini","mistral"],
           "enumDescriptions": [
+            "Ollama local models — no API key needed (default)",
             "Anthropic Claude — set key via 'specsmith: Set API Key'",
             "OpenAI GPT/O-series — set key via 'specsmith: Set API Key'",
             "Google Gemini — set key via 'specsmith: Set API Key'",
-            "Mistral AI + Pixtral OCR — set key via 'specsmith: Set API Key'",
-            "Ollama local models — no API key needed"
+            "Mistral AI + Pixtral OCR — set key via 'specsmith: Set API Key'"
           ],
-          "description": "Default LLM provider. Overridden automatically if exactly one API key is configured."
+          "description": "Default LLM provider. Ollama (local) is the default — no API key needed. Auto-overridden if exactly one cloud API key is configured."
         },
         "specsmith.defaultModel": {
           "type": "string", "default": "",
