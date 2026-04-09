@@ -744,13 +744,13 @@ function _execCall(execPath: string): string {
 // ── Phase reading ────────────────────────────────────────────────────────
 
 const PHASE_CATALOG: Record<string, { emoji: string; label: string; desc: string; next: string | null }> = {
-  inception:      { emoji: '\uD83C\uDF31', label: 'Inception',        desc: 'Governance scaffold, project type, AGENTS.md',           next: 'architecture'   },
-  architecture:   { emoji: '\uD83C\uDFD7', label: 'Architecture',     desc: 'ARCHITECTURE.md, components, key decisions sealed',       next: 'requirements'   },
-  requirements:   { emoji: '\uD83D\uDCCB', label: 'Requirements',     desc: 'REQUIREMENTS.md, stress-tested, equilibrium reached',     next: 'test_spec'      },
-  test_spec:      { emoji: '\u2705',        label: 'Test Spec',        desc: 'TEST_SPEC.md covering all P1 requirements (≥80 %)',       next: 'implementation' },
-  implementation: { emoji: '\u2699',        label: 'Implementation',   desc: 'Code → commit → audit → ledger cycle',                    next: 'verification'   },
-  verification:   { emoji: '\uD83D\uDD2C', label: 'Verification',     desc: 'Epistemic audit passes, trace vault sealed',              next: 'release'        },
-  release:        { emoji: '\uD83D\uDE80', label: 'Release',           desc: 'CHANGELOG updated, tag created, compliance report filed', next: null             },
+  inception:      { emoji: '\uD83C\uDF31', label: 'Inception',        desc: 'Create scaffold.yml, AGENTS.md, set project type',        next: 'architecture'   },
+  architecture:   { emoji: '\uD83C\uDFD7', label: 'Architecture',     desc: 'Write ARCHITECTURE.md, define components, seal decisions', next: 'requirements'   },
+  requirements:   { emoji: '\uD83D\uDCCB', label: 'Requirements',     desc: 'Populate REQUIREMENTS.md, stress-test, reach equilibrium', next: 'test_spec'      },
+  test_spec:      { emoji: '\u2705',        label: 'Test Spec',        desc: 'Write TEST_SPEC.md covering all P1 reqs (\u2265 80%)',         next: 'implementation' },
+  implementation: { emoji: '\u2699',        label: 'Implementation',   desc: 'Code \u2192 commit \u2192 audit \u2192 ledger loop',                     next: 'verification'   },
+  verification:   { emoji: '\uD83D\uDD2C', label: 'Verification',     desc: 'Pass epistemic audit, seal trace vault, clean export',     next: 'release'        },
+  release:        { emoji: '\uD83D\uDE80', label: 'Release',           desc: 'Update CHANGELOG, create tag, file compliance report',    next: null             },
 };
 const PHASE_ORDER = ['inception','architecture','requirements','test_spec','implementation','verification','release'];
 
@@ -935,8 +935,8 @@ ${(() => {
     return `<div class="phase-bar">
   <span class="phase-pill">${p.emoji} ${p.label}</span>
   <span class="phase-desc" title="${p.desc}">${p.desc}</span>
-  <span class="phase-prog">${p.pct}% ready · step ${phaseIdx + 1}/7</span>
-  ${p.next ? `<button class="tb" onclick="phaseNext()" title="Advance to ${p.next}">→ ${p.next}</button>` : ''}
+  <span class="phase-prog">${p.pct}% ready \u00b7 step ${phaseIdx + 1}/7</span>
+  ${p.next ? `<button class="tb" onclick="phaseNext()" title="Advance to ${PHASE_CATALOG[p.next]?.label ?? p.next}">\u2192 ${PHASE_CATALOG[p.next]?.label ?? p.next}</button>` : ''}
   <select class="phase-sel" onchange="phaseSet(this.value)">${phaseOpts}</select>
 </div>`;
   })()}
@@ -1067,7 +1067,7 @@ Profile is stored in <b>scaffold.yml</b> as <code>execution_profile</code>.</div
   <button class="qa-btn" onclick="runCmd('req list')">📋 req list</button>
   <button class="qa-btn" onclick="runCmd('req gaps')">⚠ req gaps</button>
   <button class="qa-btn" onclick="runCmd('tools scan --fpga')">🔧 tools scan</button>
-  <button class="qa-btn" onclick="runCmd('phase')">🌱 phase status</button>
+  <button class="qa-btn" onclick="runCmd('phase show')">\uD83D\uDCCA Lifecycle Status</button>
 </div>
 <h3>AI Prompt Palette</h3>
 ${prompts}
