@@ -119,10 +119,12 @@ interface Msg {
     | 'getSysInfo' | 'getOllamaModels'
     | 'ollamaRemoveModel' | 'ollamaUpdateModel' | 'ollamaUpdateAll'
     | 'checkOllamaVersion' | 'ollamaUpgrade'
-    | 'setApiKey' | 'verifyApiKey' | 'getApiKeyStatus' | 'setDefaultProvider';
+    | 'setApiKey' | 'verifyApiKey' | 'getApiKeyStatus' | 'setDefaultProvider'
+    | 'getGpuInfo' | 'setOllamaCtx';
   channel?: string;
   modelId?: string;
   provider?: string;
+  value?: string;
 }
 
 // ── Message handler ────────────────────────────────────────────────────────────
@@ -247,6 +249,26 @@ async function _handleMsg(msg: Msg): Promise<void> {
     case 'getSysInfo': void _sendSysInfo(); break;
     case 'getOllamaModels': void _sendOllamaModels(); break;
     case 'checkOllamaVersion': void _checkOllamaVersion(); break;
+
+    case 'getGpuInfo': {
+      void (async () => {
+        const { OllamaManager } = await import('./OllamaManager');
+        const vram = await OllamaManager.getVramGb();
+        let rec = '4K';
+        if (vram >= 16) { rec = '32K'; }
+        else if (vram >= 8) { rec = '16K'; }
+        else if (vram >= 4) { rec = '8K'; }
+        const cur = vscode.workspace.getConfiguration('specsmith').get<number>('ollamaContextLength', 0);
+        _panel?.webview.postMessage({ type: 'gpuInfo', vram: vram.toFixed(1), rec, currentCtx: cur });
+      })();
+      break;
+    }
+
+    case 'setOllamaCtx': {
+      const val = parseInt(msg.value ?? '0', 10);
+      void vscode.workspace.getConfiguration('specsmith').update('ollamaContextLength', val, vscode.ConfigurationTarget.Global);
+      break;
+    }
 
     case 'setApiKey': {
       if (!msg.provider) { break; }
@@ -673,6 +695,24 @@ ${upd ? `<div class="upd-banner">\u2b06 specsmith <b>${data.availableVersion}</b
   <button class="btn-sm" onclick="loadModels()">&#x21BA; Refresh Models</button>
   <button class="btn-sm" onclick="vscode.postMessage({command:'ollamaUpdateAll'})">\u2b06 Update All</button>
 </div>
+<h3>Context Window</h3>
+<div class="info-box" style="font-size:10px">Controls how much text the model can process per turn. Auto uses GPU VRAM to select the best size. Larger windows use more VRAM.</div>
+<div class="ver-grid">
+  <span class="ver-lbl">Size</span>
+  <select id="ollama-ctx" onchange="vscode.postMessage({command:'setOllamaCtx',value:this.value})">
+    <option value="0">Auto (detect from GPU)</option>
+    <option value="4096">4K tokens</option>
+    <option value="8192">8K tokens</option>
+    <option value="16384">16K tokens</option>
+    <option value="32768">32K tokens</option>
+    <option value="65536">64K tokens</option>
+    <option value="131072">128K tokens</option>
+  </select>
+  <span class="ver-lbl">Detected GPU</span>
+  <span class="ver-val" id="ollama-gpu">checking\u2026</span>
+  <span class="ver-lbl">Recommended</span>
+  <span class="ver-val" id="ollama-rec">\u2014</span>
+</div>
 </div>
 
 <!-- System tab -->
@@ -692,7 +732,7 @@ function sw(id){
     document.querySelectorAll('.tab')[i].classList.toggle('active',t===id);
     document.getElementById('t-'+t).classList.toggle('active',t===id);
   });
-  if(id==='ollama')loadModels();
+  if(id==='ollama'){loadModels();vscode.postMessage({command:'getGpuInfo'});}
   if(id==='system')getSys();
 }
 function refresh(){vscode.postMessage({command:'refresh'})}
@@ -781,6 +821,14 @@ window.addEventListener('message',({data})=>{
     load.style.display=data.models&&data.models.length?'none':'';
     tbl.style.display=data.models&&data.models.length?'':'none';
     if(!data.models||!data.models.length){load.textContent='No Ollama models installed';}
+  }
+  if(data.type==='gpuInfo'){
+    var ge=document.getElementById('ollama-gpu');
+    var re2=document.getElementById('ollama-rec');
+    var cs=document.getElementById('ollama-ctx');
+    if(ge)ge.textContent=data.vram>0?data.vram+' GB VRAM':'No GPU detected';
+    if(re2)re2.textContent=data.rec+' tokens (based on '+data.vram+' GB VRAM)';
+    if(cs&&data.currentCtx!==undefined)cs.value=String(data.currentCtx);
   }
   if(data.type==='ollamaVersionInfo'){
     document.getElementById('ollama-chk-btn').textContent='\uD83D\uDD0D Check Ollama';

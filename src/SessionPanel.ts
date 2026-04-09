@@ -810,7 +810,7 @@ export class SessionPanel implements vscode.Disposable {
   #ibar.da{border-top:2px solid var(--teal);background:rgba(78,201,176,.06)}
   #dh{display:none;text-align:center;color:var(--teal);font-size:11px;padding:2px 0;font-style:italic}
   #ibar.da #dh{display:block}
-  #tmtr{display:flex;align-items:center;gap:8px;padding:3px 10px;background:var(--sf);border-top:1px solid var(--br);font-size:11px;color:var(--dim);flex-shrink:0}
+  #tmtr{display:flex;align-items:center;gap:8px;padding:3px 10px;background:var(--sf);border-bottom:1px solid var(--br);font-size:11px;color:var(--dim);flex-shrink:0}
   #ctrk{flex:1;height:4px;background:var(--br);border-radius:2px;overflow:hidden}
   #cfil{height:100%;width:0%;background:var(--grn);border-radius:2px;transition:width .4s,background .4s}
   #cpct{min-width:28px;text-align:right}
@@ -831,7 +831,7 @@ export class SessionPanel implements vscode.Disposable {
   .tb2:hover:not(:disabled){border-color:var(--teal);color:var(--teal)}
   .tb2:disabled{opacity:.4;cursor:not-allowed}
   .kh{font-size:10px;color:var(--dim);margin-left:auto}
-  #vcsbar{display:flex;align-items:center;gap:8px;padding:2px 10px;background:var(--sf);border-top:1px solid var(--br);font-size:10px;color:var(--dim);flex-shrink:0}
+  #vcsbar{display:flex;align-items:center;gap:8px;padding:2px 10px;background:var(--sf);border-bottom:1px solid var(--br);font-size:10px;color:var(--dim);flex-shrink:0}
   #vcsbar .vb{color:var(--teal);font-weight:600}
   #vcsbar .vc{background:rgba(206,145,120,.15);color:var(--amb);border-radius:8px;padding:0 5px;font-weight:600;font-size:9px}
   #typ{display:none;gap:5px;align-items:center;color:var(--teal);font-size:11px}
@@ -867,21 +867,21 @@ export class SessionPanel implements vscode.Disposable {
   <button class="hbtn" title="Settings (venv, Ollama, version check)" onclick="vscode.postMessage({command:'showSettings'})">⚙</button>
   <button class="hbtn" title="Help (keyboard shortcuts, commands, usage)" onclick="vscode.postMessage({command:'showHelp'})">❓</button>
 </div>
-<div id="chat"></div>
-<div id="rh" title="Drag · Dbl-click collapse"></div>
-<div id="obn"><span>⚠</span><span id="obt">Context high</span>
-  <button onclick="document.getElementById('obn').classList.remove('show')">✕</button></div>
+<div id="vcsbar">
+  <span>\uD83D\uDD00</span><span class="vb" id="vb">\u2014</span>
+  <span id="vchg"></span>
+  <span style="flex:1"></span>
+  <span id="vwd" style="font-family:var(--mn);opacity:.7" title=""></span>
+</div>
 <div id="tmtr">
   <span>Context</span>
   <div id="ctrk"><div id="cfil"></div></div>
   <span id="cpct">0%</span><span id="tcnt">0+0</span><span id="tcst">$0.0000</span>
 </div>
-<div id="vcsbar">
-  <span>🔀</span><span class="vb" id="vb">—</span>
-  <span id="vchg"></span>
-  <span style="flex:1"></span>
-  <span id="vwd" style="font-family:var(--mn);opacity:.7" title=""></span>
-</div>
+<div id="obn"><span>\u26a0</span><span id="obt">Context high</span>
+  <button onclick="document.getElementById('obn').classList.remove('show')">\u2715</button></div>
+<div id="chat"></div>
+<div id="rh" title="Drag \u00b7 Dbl-click collapse"></div>
 <div id="ibar">
   <div id="dh">📎 Drop files to inject as context</div>
   <div id="typ"><div class="d"></div><div class="d"></div><div class="d"></div>
