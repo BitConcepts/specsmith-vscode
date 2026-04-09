@@ -42,7 +42,7 @@ export function showSettingsPanel(context: vscode.ExtensionContext): void {
   _reload();
   // Auto-check for specsmith updates when the panel first opens so the
   // update badge and version info are current without manual action.
-  setTimeout(() => { if (_ctx && _panel) { void _checkVersion(_ctx); } }, 2000);
+  setTimeout(() => { if (_ctx && _panel) { void _checkVersion(_ctx); void _sendApiKeyStatus(); } }, 2000);
   // Auto-check Ollama version + model updates on open (respects setting)
   const autoOllama = vscode.workspace.getConfiguration('specsmith').get<boolean>('checkOllamaOnStart', true);
   if (autoOllama) {
@@ -71,6 +71,8 @@ interface SettingsData {
   releaseChannel: string;
   venvVersion: string | null;
   venvActive: boolean;
+  apiKeys: Array<{ id: string; label: string; hasKey: boolean }>;
+  defaultProvider: string;
 }
 
 function _loadData(context: vscode.ExtensionContext): SettingsData {
@@ -91,7 +93,9 @@ function _loadData(context: vscode.ExtensionContext): SettingsData {
   const checkMs = context.globalState.get<number>('specsmith.lastVersionCheck', 0);
   const lastCheck = checkMs ? new Date(checkMs).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : null;
   const releaseChannel = vscode.workspace.getConfiguration('specsmith').get<string>('releaseChannel', 'stable');
-  return { installedVersion, availableVersion: avail || null, lastUpdateCheck: lastCheck, releaseChannel, venvVersion, venvActive: venvExists() };
+  const defaultProvider = vscode.workspace.getConfiguration('specsmith').get<string>('defaultProvider', 'anthropic');
+  // API key status is loaded async — start with empty, filled by _sendApiKeyStatus()
+  return { installedVersion, availableVersion: avail || null, lastUpdateCheck: lastCheck, releaseChannel, venvVersion, venvActive: venvExists(), apiKeys: [], defaultProvider };
 }
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -103,9 +107,11 @@ interface Msg {
     | 'removeOtherInstalls'
     | 'getSysInfo' | 'getOllamaModels'
     | 'ollamaRemoveModel' | 'ollamaUpdateModel' | 'ollamaUpdateAll'
-    | 'checkOllamaVersion' | 'ollamaUpgrade';
+    | 'checkOllamaVersion' | 'ollamaUpgrade'
+    | 'setApiKey' | 'verifyApiKey' | 'getApiKeyStatus' | 'setDefaultProvider';
   channel?: string;
   modelId?: string;
+  provider?: string;
 }
 
 // ── Message handler ────────────────────────────────────────────────────────────
@@ -232,6 +238,55 @@ async function _handleMsg(msg: Msg): Promise<void> {
     case 'getSysInfo': void _sendSysInfo(); break;
     case 'getOllamaModels': void _sendOllamaModels(); break;
     case 'checkOllamaVersion': void _checkOllamaVersion(); break;
+
+    case 'setApiKey': {
+      if (!msg.provider) { break; }
+      const { ApiKeyManager } = await import('./ApiKeyManager');
+      const def = (['anthropic', 'openai', 'gemini', 'mistral'] as const).find(p => p === msg.provider);
+      if (!def) { break; }
+      const labels: Record<string, string> = { anthropic: 'Anthropic', openai: 'OpenAI', gemini: 'Google Gemini', mistral: 'Mistral AI' };
+      const envVars: Record<string, string> = { anthropic: 'ANTHROPIC_API_KEY', openai: 'OPENAI_API_KEY', gemini: 'GOOGLE_API_KEY', mistral: 'MISTRAL_API_KEY' };
+      const existing = await ApiKeyManager.getKey(_ctx.secrets, def);
+      const value = await vscode.window.showInputBox({
+        title: `specsmith — ${labels[def]} API Key`,
+        prompt: `Enter your ${envVars[def]}. Stored in OS credential store.`,
+        value: existing ?? '', password: true, ignoreFocusOut: true,
+      });
+      if (value === undefined) { break; }
+      if (value === '') {
+        await _ctx.secrets.delete(`specsmith.key.${def}`);
+      } else {
+        await ApiKeyManager.setKey(_ctx.secrets, def, value);
+      }
+      void _sendApiKeyStatus();
+      break;
+    }
+
+    case 'verifyApiKey': {
+      if (!msg.provider) { break; }
+      const { ApiKeyManager: AKM2 } = await import('./ApiKeyManager');
+      const key2 = await AKM2.getKey(_ctx.secrets, msg.provider);
+      if (!key2) {
+        _panel?.webview.postMessage({ type: 'apiKeyVerified', provider: msg.provider, ok: false, error: 'No key set' });
+        break;
+      }
+      try {
+        const { fetchModels } = await import('./ModelRegistry');
+        const models = await fetchModels(msg.provider, key2);
+        _panel?.webview.postMessage({ type: 'apiKeyVerified', provider: msg.provider, ok: true, models: models.length });
+      } catch (err) {
+        _panel?.webview.postMessage({ type: 'apiKeyVerified', provider: msg.provider, ok: false, error: String(err) });
+      }
+      break;
+    }
+
+    case 'getApiKeyStatus': void _sendApiKeyStatus(); break;
+
+    case 'setDefaultProvider': {
+      if (!msg.provider) { break; }
+      void vscode.workspace.getConfiguration('specsmith').update('defaultProvider', msg.provider, vscode.ConfigurationTarget.Global);
+      break;
+    }
 
     case 'ollamaRemoveModel': {
       if (!msg.modelId) { break; }
@@ -421,7 +476,20 @@ async function _checkOllamaVersion(): Promise<void> {
   _panel.webview.postMessage({ type: 'ollamaVersionInfo', installed, latest });
 }
 
-// ── Shell path helper ─────────────────────────────────────────────────────────
+// ── API key status ──────────────────────────────────────────────────────────────────
+
+async function _sendApiKeyStatus(): Promise<void> {
+  if (!_panel || !_ctx) { return; }
+  const { ApiKeyManager, PROVIDERS } = await import('./ApiKeyManager');
+  const keys: Array<{ id: string; label: string; hasKey: boolean }> = [];
+  for (const p of PROVIDERS) {
+    const k = await ApiKeyManager.getKey(_ctx.secrets, p.id);
+    keys.push({ id: p.id, label: p.label, hasKey: !!k });
+  }
+  _panel.webview.postMessage({ type: 'apiKeyStatus', keys });
+}
+
+// ── Shell path helper ─────────────────────────────────────────────────────────────────
 
 function _shellPath(): string | undefined {
   if (process.platform === 'win32') { return 'powershell.exe'; }
@@ -554,6 +622,24 @@ ${upd ? `<div class="upd-banner">\u2b06 specsmith <b>${data.availableVersion}</b
 <div class="btn-row">
   <button class="btn" id="chk-btn" onclick="chkVer()">&#x1f50d; Check for Updates</button>
   ${upd ? '<button class="btn btn-upd" onclick="installUpd()">\u2b06 Install Update</button>' : ''}
+</div>
+<h3>\uD83D\uDD11 API Keys</h3>
+<div class="info-box" style="font-size:10px">Keys are stored in your OS credential store (Windows Credential Manager / macOS Keychain). Never written to settings.json.</div>
+<table id="api-key-table" style="font-size:11px">
+  <thead><tr><td><b>Provider</b></td><td>Status</td><td></td></tr></thead>
+  <tbody id="api-key-body">
+    <tr><td colspan="3" class="dim">Loading\u2026</td></tr>
+  </tbody>
+</table>
+<div class="ver-grid" style="margin-top:8px">
+  <span class="ver-lbl">Default</span>
+  <select id="def-prov" onchange="vscode.postMessage({command:'setDefaultProvider',provider:this.value})">
+    <option value="anthropic"${data.defaultProvider === 'anthropic' ? ' selected' : ''}>Anthropic (Claude)</option>
+    <option value="openai"${data.defaultProvider === 'openai' ? ' selected' : ''}>OpenAI (GPT)</option>
+    <option value="gemini"${data.defaultProvider === 'gemini' ? ' selected' : ''}>Google Gemini</option>
+    <option value="mistral"${data.defaultProvider === 'mistral' ? ' selected' : ''}>Mistral AI</option>
+    <option value="ollama"${data.defaultProvider === 'ollama' ? ' selected' : ''}>Ollama (local)</option>
+  </select>
 </div>
 </div>
 
@@ -692,6 +778,29 @@ window.addEventListener('message',({data})=>{
     document.getElementById('ollama-ver').textContent=data.installed||'(not running)';
     document.getElementById('ollama-latest').textContent=data.latest?(data.installed&&data.latest!==data.installed?data.latest+' \u2190 update available':data.latest+' \u2713 up to date'):'(could not check)';
   }
+  if(data.type==='apiKeyStatus'){
+    const tbody=document.getElementById('api-key-body');
+    if(tbody&&data.keys){
+      tbody.innerHTML=data.keys.map(k=>{
+        const icon=k.hasKey?'<span style="color:var(--grn);font-weight:700">\u2713</span>':'<span style="color:var(--dim)">\u2014</span>';
+        const label=k.hasKey?'set':'not set';
+        return \`<tr><td>\${k.label}</td><td>\${icon} \${label}</td>
+          <td style="display:flex;gap:3px">
+            <button class="tb" onclick="setKey('\${k.id}')">\${k.hasKey?'\u270E Edit':'\uD83D\uDD11 Set'}</button>
+            \${k.hasKey?\`<button class="tb" id="vk-\${k.id}" onclick="verKey(this,'\${k.id}')">\u2705 Verify</button>\`:''}
+          </td></tr>\`;
+      }).join('');
+    }
+  }
+  if(data.type==='apiKeyVerified'){
+    const btn=document.getElementById('vk-'+data.provider);
+    if(btn){
+      if(data.ok){btn.textContent='\u2713 '+data.models+' models';btn.style.color='var(--grn)';}
+      else{btn.textContent='\u2717 Failed';btn.style.color='var(--red)';}
+      btn.disabled=false;
+      setTimeout(()=>{if(btn){btn.textContent='\u2705 Verify';btn.style.color='';btn.disabled=false;}},4000);
+    }
+  }
   if(data.type==='showRestartBanner'){
     // Show persistent restart banner — stays visible until user restarts or dismisses
     const banner=document.getElementById('restart-banner');
@@ -702,8 +811,11 @@ window.addEventListener('message',({data})=>{
     }
   }
 });
+function setKey(prov){vscode.postMessage({command:'setApiKey',provider:prov})}
+function verKey(btn,prov){btn.textContent='\u23f3\u2026';btn.disabled=true;vscode.postMessage({command:'verifyApiKey',provider:prov})}
 // Auto-load sys info on open
 getSys();
+vscode.postMessage({command:'getApiKeyStatus'});
 </script>
 </body></html>`;
 }
