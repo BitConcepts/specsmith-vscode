@@ -449,7 +449,14 @@ export class SessionPanel implements vscode.Disposable {
         break;
 
       case 'openFile':
-        if (msg.filePath) { void vscode.window.showTextDocument(vscode.Uri.file(msg.filePath)); }
+        if (msg.filePath) {
+          const uri = vscode.Uri.file(msg.filePath);
+          if (fs.existsSync(msg.filePath) && fs.statSync(msg.filePath).isDirectory()) {
+            void vscode.commands.executeCommand('revealFileInOS', uri);
+          } else {
+            void vscode.window.showTextDocument(uri);
+          }
+        }
         break;
 
       case 'clearHistory':
@@ -500,7 +507,6 @@ export class SessionPanel implements vscode.Disposable {
           const newDir = uris[0].fsPath;
           this._config.projectDir = newDir;
           this._saveSettings();
-          // Restart the bridge with the new directory
           void ApiKeyManager.getAllEnv(this._secrets).then((env) => {
             this._bridge.restart(this._config, env);
           });
@@ -665,15 +671,10 @@ export class SessionPanel implements vscode.Disposable {
       const models = await fetchModels(provider, key);
       if (models.length > 0) {
         void this._panel.webview.postMessage({ type: 'models', models } satisfies SpecsmithEvent);
-      } else {
-        // Live fetch returned empty — use static fallback
-        const fallback = getStaticModels(provider);
-        void this._panel.webview.postMessage({ type: 'models', models: fallback } satisfies SpecsmithEvent);
       }
+      // If empty, don't send — the static models from init are already showing
     } catch {
-      // API error — use static fallback
-      const fallback = getStaticModels(provider);
-      void this._panel.webview.postMessage({ type: 'models', models: fallback } satisfies SpecsmithEvent);
+      // API error — don't clear the model dropdown
     }
   }
 
@@ -823,7 +824,6 @@ export class SessionPanel implements vscode.Disposable {
 <div id="pbar">
   <span style="opacity:.7;cursor:pointer" onclick="openProj()">📁</span>
   <span class="dlbl" id="dlbl" title="" onclick="openProj()">.</span>
-  <button class="hbtn" title="Change project directory" onclick="vscode.postMessage({command:'changeProject'})">\uD83D\uDCC2</button>
   <span class="bsep">│</span>
   <label for="ps" style="color:var(--dim)">Provider</label>
   <select id="ps">
@@ -875,11 +875,9 @@ export class SessionPanel implements vscode.Disposable {
     <button class="tb2" onclick="q('epistemic')">🧠 epistemic</button>
     <button class="tb2" onclick="q('stress')">⚡ stress</button>
     <button class="tb2" onclick="q('/clear')">🗑 clear</button>
-    <button class="tb2" onclick="q('status')">\uD83D\uDCCA status</button>
+    <button class="tb2" onclick="q('status')">📊 status</button>
     <button class="tb2" onclick="pf()" title="Pick @file">@ file</button>
-    <button class="tb2" onclick="rptFromChat()" title="Report a bug or issue">\uD83D\uDC1B report</button>
-    <label class="tb2" style="cursor:pointer" title="Auto-accept: automatically approve agent proposals"><input type="checkbox" id="autoAcc" style="margin:0 3px 0 0;vertical-align:middle">auto</label>
-    <span class="kh">Enter sends \u00b7 Shift+Enter newline</span>
+    <span class="kh">Enter sends · Shift+Enter newline</span>
   </div>
 </div>
 <script>
@@ -1080,17 +1078,6 @@ function addE(m){
   d.dataset.errTitle=short;
   d.dataset.errDetail=long||'';
   C.appendChild(d);sb2()}
-/* Auto-accept: when checked, automatically send 'yes' when agent asks for approval */
-let _autoAccept=false;
-document.addEventListener('change',e=>{if(e.target&&e.target.id==='autoAcc'){_autoAccept=e.target.checked;}});
-/* Bug report from chat: ask AI to help package the report */
-function rptFromChat(){
-  if(busy)return;
-  const prompt='I want to report a bug or issue. Look at the recent conversation for any errors or problems. Help me write a clear bug report title and description, then file it to GitHub Issues using the reportBug command.';
-  addS('> Starting bug report...');
-  setBusy(true);
-  vscode.postMessage({command:'send',text:prompt});
-}
 function rptBug(btn){
   const el=btn.closest('.el');const t=el?.dataset.errTitle||'specsmith error';const det=el?.dataset.errDetail||'';
   // Show consent summary before sending anything
@@ -1293,18 +1280,10 @@ window.addEventListener('message',({data})=>{switch(data.type){
   case 'init':if(data.provider){document.getElementById('ps').value=data.provider;popMdl(data.provider,data.models||[],data.model)}
     if(data.projectDir){const l=document.getElementById('dlbl');l.textContent=data.projectDir.split(/[\\\\/]/).pop()||data.projectDir;l.title=data.projectDir}
     if(data.availableProviders){const ps=document.getElementById('ps');for(const o of ps.options){if(!data.availableProviders.includes(o.value)){o.disabled=true;o.textContent=o.value+' (no key)'}}}break;
-  case 'models':if(data.models&&data.models.length>0)popMdl(document.getElementById('ps').value,data.models,curMdl);break;
+  case 'models':popMdl(document.getElementById('ps').value,data.models,curMdl);break;
   case 'ready':setBusy(false);addS(\`AEE Agent ready — \${data.provider||''}/\${data.model||''} (\${data.tools||0} tools)\`);
     if(data.project_dir){const l=document.getElementById('dlbl');l.textContent=data.project_dir.split(/[\\\\/]/).pop();l.title=data.project_dir}break;
-  case 'llm_chunk':{
-    // Strip inline tool call blocks that local models sometimes emit as text
-    let _t=data.text||'';
-    _t=_t.replace(/<tools?>\s*\{[\s\S]*?\}\s*<\/tools?>/g,'').trim();
-    if(_t)addA(_t);
-    // Auto-accept: if the agent asks for approval and auto is checked, send 'yes'
-    if(_autoAccept&&_t&&/would you like (me to |to )?(proceed|continue|do (this|that|it))|shall I (proceed|continue)|approve|ready to (proceed|go)/i.test(_t)){
-      setTimeout(()=>{addS('\u2713 Auto-accepted');vscode.postMessage({command:'send',text:'yes, proceed'});},300);}
-    break;}
+  case 'llm_chunk':addA(data.text||'');break;
   case 'tool_started':addTStart(data.name||'?',data.args||{});break;
   case 'tool_finished':addT(data.name||'?',data.result||'',!!data.is_error);break;
   case 'tool_crash':addToolCrash(data);setBusy(false);break;
