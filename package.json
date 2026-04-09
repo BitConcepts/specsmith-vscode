@@ -2,7 +2,7 @@
   "name": "specsmith-vscode",
   "displayName": "specsmith - AEE Workbench",
   "description": "Applied Epistemic Engineering workbench. 6-tab Settings panel, AI agent sessions, execution profiles, FPGA/HDL tool support, Ollama local LLMs, and tool installer.",
-  "version": "0.3.12",
+  "version": "0.3.13",
   "publisher": "BitConcepts",
   "license": "MIT",
   "engines": {
@@ -407,13 +407,13 @@
             "mistral"
           ],
           "enumDescriptions": [
-            "Ollama local models \u00e2\u20ac\u201d no API key needed (default)",
-            "Anthropic Claude \u00e2\u20ac\u201d set key via 'specsmith: Set API Key'",
-            "OpenAI GPT/O-series \u00e2\u20ac\u201d set key via 'specsmith: Set API Key'",
-            "Google Gemini \u00e2\u20ac\u201d set key via 'specsmith: Set API Key'",
-            "Mistral AI + Pixtral OCR \u00e2\u20ac\u201d set key via 'specsmith: Set API Key'"
+            "Ollama local models â€” no API key needed (default)",
+            "Anthropic Claude â€” set key via 'specsmith: Set API Key'",
+            "OpenAI GPT/O-series â€” set key via 'specsmith: Set API Key'",
+            "Google Gemini â€” set key via 'specsmith: Set API Key'",
+            "Mistral AI + Pixtral OCR â€” set key via 'specsmith: Set API Key'"
           ],
-          "description": "Default LLM provider. Ollama (local) is the default \u00e2\u20ac\u201d no API key needed. Auto-overridden if exactly one cloud API key is configured."
+          "description": "Default LLM provider. Ollama (local) is the default â€” no API key needed. Auto-overridden if exactly one cloud API key is configured."
         },
         "specsmith.defaultModel": {
           "type": "string",
@@ -447,12 +447,12 @@
           ],
           "enumDescriptions": [
             "Auto-detect based on GPU VRAM (recommended)",
-            "4K tokens \u00e2\u20ac\u201d safe for all hardware",
-            "8K tokens \u00e2\u20ac\u201d 4-8GB VRAM",
-            "16K tokens \u00e2\u20ac\u201d 8-16GB VRAM",
-            "32K tokens \u00e2\u20ac\u201d 16-24GB VRAM",
-            "64K tokens \u00e2\u20ac\u201d 24GB+ VRAM",
-            "128K tokens \u00e2\u20ac\u201d 24GB+ VRAM (supported models only)"
+            "4K tokens â€” safe for all hardware",
+            "8K tokens â€” 4-8GB VRAM",
+            "16K tokens â€” 8-16GB VRAM",
+            "32K tokens â€” 16-24GB VRAM",
+            "64K tokens â€” 24GB+ VRAM",
+            "128K tokens â€” 24GB+ VRAM (supported models only)"
           ],
           "description": "Ollama context window size (num_ctx). 0 = auto-detect from GPU VRAM. Session-specific: changing this takes effect when you open a new session."
         },
