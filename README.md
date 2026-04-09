@@ -260,8 +260,15 @@ the context window (`specsmith.ollamaContextLength`).
 
 ## Supporting the Project
 
-If specsmith is saving you time, consider [sponsoring BitConcepts](https://github.com/sponsors/BitConcepts)
-or ⭐ starring both repos. It helps prioritize features and bug fixes.
+specsmith is open source and built by a small team. Every bit of support helps:
+
+- ⭐ **Star** [specsmith](https://github.com/BitConcepts/specsmith) and [specsmith-vscode](https://github.com/BitConcepts/specsmith-vscode) on GitHub
+- 📣 **Tell your friends and colleagues** — word of mouth is our best growth channel
+- 🐛 **Report bugs** via [Issues](https://github.com/BitConcepts/specsmith-vscode/issues) — include VS Code + specsmith versions
+- 💡 **Suggest features** via [Discussions](https://github.com/BitConcepts/specsmith-vscode/discussions) — we read every suggestion
+- 🔧 **Fix bugs and contribute** — see [CONTRIBUTING.md](CONTRIBUTING.md); TypeScript PRs welcome
+- 📝 **Write about specsmith** — blog posts, tutorials, and demos help the community grow
+- ❤️ **[Sponsor BitConcepts](https://github.com/sponsors/BitConcepts)** — directly funds development
 
 ---
 
