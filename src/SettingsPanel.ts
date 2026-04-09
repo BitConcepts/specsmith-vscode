@@ -93,7 +93,7 @@ function _loadData(context: vscode.ExtensionContext): SettingsData {
   const checkMs = context.globalState.get<number>('specsmith.lastVersionCheck', 0);
   const lastCheck = checkMs ? new Date(checkMs).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : null;
   const releaseChannel = vscode.workspace.getConfiguration('specsmith').get<string>('releaseChannel', 'stable');
-  const defaultProvider = vscode.workspace.getConfiguration('specsmith').get<string>('defaultProvider', 'anthropic');
+  const defaultProvider = vscode.workspace.getConfiguration('specsmith').get<string>('defaultProvider', 'ollama');
   // API key status is loaded async — start with empty, filled by _sendApiKeyStatus()
   return { installedVersion, availableVersion: avail || null, lastUpdateCheck: lastCheck, releaseChannel, venvVersion, venvActive: venvExists(), apiKeys: [], defaultProvider };
 }
@@ -598,8 +598,7 @@ ${upd ? `<div class="upd-banner">\u2b06 specsmith <b>${data.availableVersion}</b
 </div>
 <div class="btn-row">
   ${data.venvActive
-    ? `<button class="btn-sm" onclick="updateVenv()">\u2b06 Update</button>
-       <button class="btn-sm" onclick="rebuildVenv()" title="Delete and recreate from scratch">\uD83D\uDD04 Rebuild</button>
+    ? `<button class="btn-sm" onclick="rebuildVenv()" title="Delete and recreate from scratch">\uD83D\uDD04 Rebuild</button>
        <button class="btn-sm tb-red" onclick="deleteVenv()" title="Delete environment">\uD83D\uDDD1 Delete</button>
        <button class="btn-sm" style="margin-left:8px;border-color:var(--amb);color:var(--amb)" onclick="removeOtherInstalls()" title="Remove specsmith from pipx/pip, keeping only this environment">\uD83E\uDDF9 Remove System Installs</button>`
     : `<button class="btn btn-upd" onclick="createVenv()">\uD83D\uDD12 Create Environment</button>`
@@ -620,6 +619,7 @@ ${upd ? `<div class="upd-banner">\u2b06 specsmith <b>${data.availableVersion}</b
 <div class="btn-row">
   <button class="btn" id="chk-btn" onclick="chkVer()">&#x1f50d; Check for Updates</button>
   ${upd ? '<button class="btn btn-upd" onclick="installUpd()">\u2b06 Install Update</button>' : ''}
+  ${data.venvActive && !upd ? '<button class="btn-sm" onclick="updateVenv()">\u2b06 Update to Latest</button>' : ''}
 </div>
 <h3>\uD83D\uDD11 API Keys</h3>
 <div class="info-box" style="font-size:10px">Keys are stored in your OS credential store (Windows Credential Manager / macOS Keychain). Never written to settings.json.</div>
@@ -632,11 +632,11 @@ ${upd ? `<div class="upd-banner">\u2b06 specsmith <b>${data.availableVersion}</b
 <div class="ver-grid" style="margin-top:8px">
   <span class="ver-lbl">Default</span>
   <select id="def-prov" onchange="vscode.postMessage({command:'setDefaultProvider',provider:this.value})">
+    <option value="ollama"${data.defaultProvider === 'ollama' ? ' selected' : ''}>Ollama (local — no key needed)</option>
     <option value="anthropic"${data.defaultProvider === 'anthropic' ? ' selected' : ''}>Anthropic (Claude)</option>
     <option value="openai"${data.defaultProvider === 'openai' ? ' selected' : ''}>OpenAI (GPT)</option>
     <option value="gemini"${data.defaultProvider === 'gemini' ? ' selected' : ''}>Google Gemini</option>
     <option value="mistral"${data.defaultProvider === 'mistral' ? ' selected' : ''}>Mistral AI</option>
-    <option value="ollama"${data.defaultProvider === 'ollama' ? ' selected' : ''}>Ollama (local)</option>
   </select>
 </div>
 </div>

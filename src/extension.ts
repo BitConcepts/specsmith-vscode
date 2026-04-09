@@ -68,7 +68,7 @@ export function activate(context: vscode.ExtensionContext): void {
   function defaultCfg() {
     const cfg = vscode.workspace.getConfiguration('specsmith');
     return {
-      provider: cfg.get<string>('defaultProvider', 'anthropic'),
+      provider: cfg.get<string>('defaultProvider', 'ollama'),
       model:    cfg.get<string>('defaultModel', ''),
     };
   }
@@ -944,6 +944,7 @@ async function _verifyAndBroadcast(context: vscode.ExtensionContext): Promise<vo
 }
 
 /** Check if a newer specsmith is available on every VS Code startup.
+ *  Uses the venv version (not system-wide) for comparison.
  *  Respects `specsmith.checkForUpdatesOnStart` setting (default: true). */
 async function _checkForSpecsmithUpdate(context: vscode.ExtensionContext): Promise<void> {
   const cfg = vscode.workspace.getConfiguration('specsmith');
@@ -952,12 +953,22 @@ async function _checkForSpecsmithUpdate(context: vscode.ExtensionContext): Promi
 
   await new Promise((r) => setTimeout(r, 5000)); // wait for startup
   try {
-    const cfg      = vscode.workspace.getConfiguration('specsmith');
-    const execPath = cfg.get<string>('executablePath', 'specsmith');
-    const current  = _probeVersion(execPath);
+    // Use venv version first (the authoritative install), fall back to PATH
+    const { getVenvSpecsmithVersion } = await import('./VenvManager');
+    const venvVer = getVenvSpecsmithVersion();
+    let current: string | null = venvVer;
+    if (!current) {
+      const execPath = cfg.get<string>('executablePath', 'specsmith');
+      current = _probeVersion(execPath);
+    }
     if (!current) { return; } // specsmith not installed
 
+    // Extract just the version number (may be 'specsmith, version X.Y.Z')
+    const verMatch = current.match(/(\d+\.\d+\.\d+(?:\.dev\d+)?)/);
+    const installedVer = verMatch?.[1] ?? current;
+
     // Fetch latest from PyPI
+    const channel = cfg.get<string>('releaseChannel', 'stable');
     const https = await import('https');
     const res = await new Promise<string>((resolve, reject) => {
       const req = https.get(
@@ -967,20 +978,37 @@ async function _checkForSpecsmithUpdate(context: vscode.ExtensionContext): Promi
       );
       req.on('error', reject);
     });
-    const pypiData = JSON.parse(res) as { info?: { version?: string } };
-    const latest   = pypiData.info?.version;
-    if (!latest || latest === current.split(/\s/)[2]) { return; }
+    const pypiData = JSON.parse(res) as { info?: { version?: string }; releases?: Record<string, unknown[]> };
+    let latest: string;
+    if (channel === 'pre-release') {
+      const candidates = Object.keys(pypiData.releases ?? {})
+        .filter(v => (pypiData.releases?.[v] as unknown[])?.length > 0)
+        .sort();
+      latest = candidates[candidates.length - 1] ?? pypiData.info?.version ?? '';
+    } else {
+      latest = pypiData.info?.version ?? '';
+    }
+    if (!latest || latest === installedVer) { return; }
+
+    // Simple semver comparison
+    const toNum = (v: string) => v.split('.').map(Number);
+    const a = toNum(latest), b = toNum(installedVer);
+    let isNewer = false;
+    for (let i = 0; i < 3; i++) {
+      if ((a[i] ?? 0) > (b[i] ?? 0)) { isNewer = true; break; }
+      if ((a[i] ?? 0) < (b[i] ?? 0)) { break; }
+    }
+    if (!isNewer) { return; }
 
     // Save to globalState so SettingsPanel shows the update on first render
     await context.globalState.update('specsmith.availableVersion', latest);
 
     const ans = await vscode.window.showInformationMessage(
-      `specsmith update available: v${latest} (installed: ${current})`,
+      `specsmith ${latest} available (you have ${installedVer}). Update via Settings.`,
       'Open Settings',
       'Later',
     );
     if (ans === 'Open Settings') {
-      // Direct to Settings panel where Update button uses the venv
       void vscode.commands.executeCommand('specsmith.showSettings');
     }
   } catch { /* silent — don't crash startup */ }
