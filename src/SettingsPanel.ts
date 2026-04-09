@@ -43,6 +43,16 @@ export function showSettingsPanel(context: vscode.ExtensionContext): void {
   // Auto-check for specsmith updates when the panel first opens so the
   // update badge and version info are current without manual action.
   setTimeout(() => { if (_ctx && _panel) { void _checkVersion(_ctx); } }, 2000);
+  // Auto-check Ollama version + model updates on open (respects setting)
+  const autoOllama = vscode.workspace.getConfiguration('specsmith').get<boolean>('checkOllamaOnStart', true);
+  if (autoOllama) {
+    setTimeout(() => {
+      if (_panel) {
+        void _checkOllamaVersion();
+        void _sendOllamaModels();
+      }
+    }, 3000);
+  }
   _panel.webview.onDidReceiveMessage((msg: Msg) => void _handleMsg(msg), null, context.subscriptions);
   _panel.onDidDispose(() => { _panel = undefined; _ctx = undefined; }, null, context.subscriptions);
 }
@@ -559,9 +569,9 @@ ${upd ? `<div class="upd-banner">\u2b06 specsmith <b>${data.availableVersion}</b
   <button class="btn-sm" onclick="ollamaUpgrade()">\u2b06 Upgrade Ollama</button>
 </div>
 <h3>Installed Models</h3>
-<div id="ollama-mdl-load" class="dim" style="margin:4px 0">Click Refresh to load installed models</div>
+<div id="ollama-mdl-load" class="dim" style="margin:4px 0">Checking models\u2026</div>
 <table id="ollama-mdl-table" style="display:none;font-size:11px">
-  <thead><tr><td><b>Model</b></td><td class="dim">Size</td><td></td></tr></thead>
+  <thead><tr><td><b>Model</b></td><td class="dim">Size</td><td class="dim">Last pulled</td><td></td></tr></thead>
   <tbody id="ollama-mdl-body"></tbody>
 </table>
 <div class="btn-row">
@@ -657,10 +667,17 @@ window.addEventListener('message',({data})=>{
     const tbody=document.getElementById('ollama-mdl-body');
     const load=document.getElementById('ollama-mdl-load');
     const tbl=document.getElementById('ollama-mdl-table');
+    const now=Date.now();
+    const STALE_MS=30*24*60*60*1000; // 30 days
     tbody.innerHTML=(data.models||[]).map(m=>{
       const gb=(m.size>0?(m.size/1073741824).toFixed(1)+'GB':'');
       const mod=(m.modified_at||'').slice(0,10);
-      return \`<tr><td>\${m.name}</td><td class="dim">\${gb}\${mod?' ['+mod+']':''}</td>
+      const modMs=m.modified_at?new Date(m.modified_at).getTime():0;
+      const stale=modMs>0&&(now-modMs)>STALE_MS;
+      const dateStyle=stale?'color:var(--amb);font-weight:600':'color:var(--dim)';
+      const staleTag=stale?' \u26a0':'';  // ⚠ indicator
+      return \`<tr><td>\${m.name}</td><td class="dim">\${gb}</td>
+        <td style="\${dateStyle}">\${mod}\${staleTag}</td>
         <td style="display:flex;gap:3px">
           <button class="tb" onclick="vscode.postMessage({command:'ollamaUpdateModel',modelId:'\${m.name}'})">\u2b06 Update</button>
           <button class="tb tb-red" onclick="vscode.postMessage({command:'ollamaRemoveModel',modelId:'\${m.name}'})">\u2717 Remove</button>

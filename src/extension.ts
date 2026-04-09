@@ -1002,11 +1002,11 @@ async function _verifyAndBroadcast(context: vscode.ExtensionContext): Promise<vo
   }
 }
 
-/** Check if a newer specsmith is available (once per day). Prompt to upgrade if so. */
+/** Check if a newer specsmith is available on every VS Code startup.
+ *  Respects `specsmith.checkForUpdatesOnStart` setting (default: true). */
 async function _checkForSpecsmithUpdate(context: vscode.ExtensionContext): Promise<void> {
-  const DAILY_MS = 24 * 60 * 60 * 1000;
-  const lastCheck = context.globalState.get<number>('specsmith.lastUpdateCheck', 0);
-  if (Date.now() - lastCheck < DAILY_MS) { return; }
+  const cfg = vscode.workspace.getConfiguration('specsmith');
+  if (cfg.get<boolean>('checkForUpdatesOnStart', true) === false) { return; }
   await context.globalState.update('specsmith.lastUpdateCheck', Date.now());
 
   await new Promise((r) => setTimeout(r, 5000)); // wait for startup

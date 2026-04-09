@@ -152,6 +152,21 @@
             "Latest pre-release / dev build (0.x.y.devN). Cutting-edge features; may have rough edges. Uses pip install --pre."
           ],
           "description": "specsmith release channel. Controls which version is installed by the 'Install or Upgrade' command and the Install Update button in the Settings panel."
+        },
+        "specsmith.checkForUpdatesOnStart": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically check for specsmith CLI updates when VS Code starts. Shows a notification if a newer version is available."
+        },
+        "specsmith.checkOllamaOnStart": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically check Ollama version and model updates when VS Code starts. Shows update indicators in the Ollama tab."
+        },
+        "specsmith.showPhaseInStatusBar": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the current AEE lifecycle phase in the VS Code status bar."
         }
       }
     }
