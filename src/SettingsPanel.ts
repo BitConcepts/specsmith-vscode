@@ -578,7 +578,6 @@ function _html(data: SettingsData): string {
   .badge{display:inline-block;background:rgba(78,201,176,.2);color:var(--teal);border-radius:10px;padding:1px 7px;font-size:9px;font-weight:700;margin-left:4px}
   .info-box{background:rgba(78,201,176,.06);border:1px solid rgba(78,201,176,.25);border-radius:4px;padding:7px 10px;font-size:11px;color:var(--teal);margin-bottom:8px}
   .warn-box{background:rgba(244,71,71,.08);border:1px solid rgba(244,71,71,.3);border-radius:4px;padding:7px 10px;font-size:11px;color:var(--red);margin-bottom:8px}
-  .upd-banner{background:rgba(78,201,176,.08);border:1px solid rgba(78,201,176,.4);border-radius:4px;padding:6px 10px;font-size:11px;color:var(--teal);margin-bottom:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
   .btn-row{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;margin-bottom:14px}
   table{width:100%;border-collapse:collapse;font-size:12px}
   td{padding:3px 7px;border-bottom:1px solid var(--br)}
@@ -599,7 +598,6 @@ function _html(data: SettingsData): string {
   <span class="title">\u2699 specsmith Settings</span>
   <button class="btn-sm" onclick="refresh()">&#x21BA; Refresh</button>
 </div>
-${upd ? `<div class="upd-banner">\u2b06 specsmith <b>${data.availableVersion}</b> available (installed <b>${data.installedVersion}</b>) &mdash; <button class="tb" style="border-color:var(--teal);color:var(--teal)" onclick="sw('env')">View Update</button></div>` : ''}
 <!-- Persistent restart banner — shown after env operations instead of a dismissible popup -->
 <div id="restart-banner">
   <span id="restart-msg">✓ Operation complete. Restart VS Code to apply changes.</span>
@@ -609,7 +607,7 @@ ${upd ? `<div class="upd-banner">\u2b06 specsmith <b>${data.availableVersion}</b
   </div>
 </div>
 <div class="tab-bar">
-  <button class="tab active" onclick="sw('env')">&#x1f527; Environment${upd ? '<span class="badge">UPD</span>' : ''}</button>
+  <button class="tab active" onclick="sw('env')">&#x1f527; Environment</button>
   <button class="tab" onclick="sw('ollama')">&#x1f916; Ollama</button>
   <button class="tab" onclick="sw('system')">&#x1f4bb; System</button>
 </div>
