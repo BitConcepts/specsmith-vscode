@@ -315,15 +315,9 @@ async function _handleMsg(msg: GovMsg): Promise<void> {
       break;
 
     case 'runCommand': {
-      // Prefer the global venv binary so terminal commands use the same
-      // specsmith version as the bridge — prevents version mismatches.
-      const venvBin = getVenvSpecsmith();
-      const exec = venvBin
-        ?? vscode.workspace.getConfiguration('specsmith').get<string>('executablePath', 'specsmith');
+      const exec = _specsmithExec();
       const term = vscode.window.createTerminal({ name: 'specsmith', cwd: _projectDir });
-      // & call operator required on Windows when the path is quoted
-      const callPrefix = process.platform === 'win32' ? '& ' : '';
-      term.sendText(`${callPrefix}"${exec}" ${msg.cmd} --project-dir "${_projectDir}"`);
+      term.sendText(`${_execCall(exec)} ${msg.cmd} --project-dir "${_projectDir}"`);
       term.show();
       break;
     }
@@ -389,19 +383,18 @@ async function _handleMsg(msg: GovMsg): Promise<void> {
 
     case 'toolInstall': {
       if (!msg.toolKey) { break; }
-      const exec5 = vscode.workspace.getConfiguration('specsmith').get<string>('executablePath', 'specsmith');
+      const exec5 = _specsmithExec();
       const term5 = vscode.window.createTerminal({ name: `install ${msg.toolKey}`, cwd: _projectDir });
-      term5.sendText(`${exec5} tools install "${msg.toolKey}"`);
+      term5.sendText(`${_execCall(exec5)} tools install "${msg.toolKey}"`);
       term5.show();
       break;
     }
 
     case 'phaseNext': {
-      const exec = vscode.workspace.getConfiguration('specsmith').get<string>('executablePath', 'specsmith');
+      const exec = _specsmithExec();
       const term = vscode.window.createTerminal({ name: 'specsmith phase', cwd: _projectDir });
-      term.sendText(`${exec} phase next --project-dir "${_projectDir}"`);
+      term.sendText(`${_execCall(exec)} phase next --project-dir "${_projectDir}"`);
       term.show();
-      // Reload after short delay
       await new Promise<void>((r) => setTimeout(r, 1500));
       _reload();
       break;
@@ -409,7 +402,7 @@ async function _handleMsg(msg: GovMsg): Promise<void> {
 
     case 'phaseSet': {
       if (!msg.phaseKey) { break; }
-      const exec2 = vscode.workspace.getConfiguration('specsmith').get<string>('executablePath', 'specsmith');
+      const exec2 = _specsmithExec();
       const r2    = cp.spawnSync(exec2, ['phase', 'set', msg.phaseKey, '--force', '--project-dir', _projectDir], { encoding: 'utf8', timeout: 5000 });
       if (r2.status === 0) {
         void vscode.window.showInformationMessage(`AEE phase set to: ${msg.phaseKey}`);
@@ -428,7 +421,7 @@ async function _handleMsg(msg: GovMsg): Promise<void> {
 
 async function _runDetectTools(): Promise<void> {
   if (!_panel || !_projectDir) { return; }
-  const exec = vscode.workspace.getConfiguration('specsmith').get<string>('executablePath', 'specsmith');
+  const exec = _specsmithExec();
   // Map tool executable names (scan output) back to FPGA_TOOLS chip values
   const EXE_TO_CHIP: Record<string, string> = {
     'vivado': 'vivado', 'quartus_sh': 'quartus', 'radiantlsp': 'radiant',
@@ -483,7 +476,7 @@ function _suggestDisciplines(projectType: string, languages: string[]): string[]
 
 async function _runScanProject(): Promise<void> {
   if (!_panel || !_projectDir) { return; }
-  const exec = vscode.workspace.getConfiguration('specsmith').get<string>('executablePath', 'specsmith');
+  const exec = _specsmithExec();
   const r    = cp.spawnSync(
     exec,
     ['scan', '--project-dir', _projectDir, '--json'],
@@ -553,7 +546,7 @@ function _saveExecutionSettings(
 
 async function _runToolsScan(): Promise<void> {
   if (!_panel || !_projectDir) { return; }
-  const exec = vscode.workspace.getConfiguration('specsmith').get<string>('executablePath', 'specsmith');
+  const exec = _specsmithExec();
   const r = cp.spawnSync(
     exec,
     ['tools', 'scan', '--project-dir', _projectDir, '--json', '--fpga'],
@@ -657,7 +650,7 @@ function _detectAndSetLanguages(projectDir: string): void {
 }
 
 async function _addGovFile(context: vscode.ExtensionContext, projectDir: string, addType: string): Promise<void> {
-  const exec = vscode.workspace.getConfiguration('specsmith').get<string>('executablePath', 'specsmith');
+  const exec = _specsmithExec();
 
   switch (addType) {
     case 'ledger': {
@@ -722,10 +715,30 @@ async function _addGovFile(context: vscode.ExtensionContext, projectDir: string,
 }
 
 function _shellPath(): string | undefined {
-  // Always use PowerShell on Windows — many commands (Remove-Item, Test-Path,
-  // Start-Process, Write-Host) are PowerShell-specific and fail in cmd.exe.
   if (process.platform === 'win32') { return 'powershell.exe'; }
   return process.env.SHELL;
+}
+
+/**
+ * Return the specsmith binary to use in this panel.
+ * Prefers the global venv binary (so all project terminals use the same
+ * version as the bridge) and falls back to the configured executablePath.
+ */
+function _specsmithExec(): string {
+  return getVenvSpecsmith()
+    ?? vscode.workspace.getConfiguration('specsmith').get<string>('executablePath', 'specsmith');
+}
+
+/**
+ * Wrap an executable path for use in a PowerShell terminal command string.
+ * On Windows, full paths must be prefixed with the & call operator;
+ * plain command names (no path separator) can be invoked directly.
+ */
+function _execCall(execPath: string): string {
+  if (process.platform === 'win32' && (execPath.includes('\\') || execPath.includes('/'))) {
+    return `& "${execPath}"`;
+  }
+  return execPath;
 }
 
 // ── Phase reading ────────────────────────────────────────────────────────

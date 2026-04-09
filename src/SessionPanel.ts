@@ -182,6 +182,8 @@ export class SessionPanel implements vscode.Disposable {
       }
       // Auto-run start protocol when agent becomes ready
       if (e.type === 'ready') {
+        // Show VCS state banner in chat so user immediately sees what's modified/staged
+        void this._showVcsState();
         setTimeout(() => this._bridge.send('start'), 300);
         // Background governance check — emit system messages for actionable issues
         setTimeout(() => this._checkGovernance(), 800);
@@ -487,8 +489,44 @@ export class SessionPanel implements vscode.Disposable {
   }
 
   /**
+   * Run git status + git log in the project directory and emit a system
+   * message showing the current VCS state.  Gives the user (and the agent
+   * context) immediate visibility into modified / staged / untracked files
+   * and recent commits without waiting for the agent to run git commands.
+   */
+  private async _showVcsState(): Promise<void> {
+    const dir = this._config.projectDir;
+    const emit = (msg: string) =>
+      void this._panel.webview.postMessage({ type: 'system', message: msg } satisfies SpecsmithEvent);
+
+    try {
+      const cp = await import('child_process');
+
+      const status = cp.spawnSync('git', ['status', '--short'], {
+        cwd: dir, encoding: 'utf8', timeout: 5000,
+      });
+      const log = cp.spawnSync('git', ['log', '--oneline', '-5'], {
+        cwd: dir, encoding: 'utf8', timeout: 5000,
+      });
+
+      if (status.status !== 0) { return; } // not a git repo
+
+      const statusText = status.stdout.trim() || '(clean — no uncommitted changes)';
+      const logText    = log.status === 0 ? log.stdout.trim() : '(no commits yet)';
+
+      // Format as a compact, readable snapshot
+      const lines: string[] = [
+        `📁 Project: ${dir}`,
+        `🔀 VCS: ${statusText}`,
+        `🗃 Recent: ${logText.split('\n').join(' │ ')}`,
+      ];
+      emit(lines.join('\n'));
+    } catch { /* not a git repo or git not installed — silently skip */ }
+  }
+
+  /**
    * Return the last `n` chat messages formatted as plain text for inclusion
-   * in a bug/issue report. Reads from the current session's chat stream
+   * in a bug/issue report.
    * (JSONL on disk) so it works even if the webview is not open.
    */
   getRecentMessages(n = 10): string {

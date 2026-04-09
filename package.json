@@ -138,6 +138,11 @@
           ],
           "description": "Ollama context window size (num_ctx). 0 = auto-detect from GPU VRAM. Session-specific: changing this takes effect when you open a new session."
         },
+        "specsmith.envPath": {
+          "type": "string",
+          "default": "",
+          "description": "Custom path to the specsmith environment (venv). Leave empty to use the default: ~/.specsmith/venv (or %USERPROFILE%\\.specsmith\\venv on Windows). The directory must contain a specsmith binary. Restart VS Code after changing this setting."
+        },
         "specsmith.releaseChannel": {
           "type": "string",
           "default": "stable",

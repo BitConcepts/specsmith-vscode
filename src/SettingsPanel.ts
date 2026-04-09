@@ -87,6 +87,7 @@ interface Msg {
   command:
     | 'refresh' | 'checkVersion' | 'installUpdate' | 'reloadWindow' | 'setReleaseChannel'
     | 'createVenv' | 'updateVenv' | 'deleteVenv' | 'rebuildVenv'
+    | 'removeOtherInstalls'
     | 'getSysInfo' | 'getOllamaModels'
     | 'ollamaRemoveModel' | 'ollamaUpdateModel' | 'ollamaUpdateAll'
     | 'checkOllamaVersion' | 'ollamaUpgrade';
@@ -140,10 +141,8 @@ async function _handleMsg(msg: Msg): Promise<void> {
       const term = vscode.window.createTerminal({ name: 'specsmith: create env', shellPath: _shellPath() });
       term.sendText(cmds.join('; '));
       term.show();
-      void vscode.window.showInformationMessage(
-        `Creating specsmith environment at ${getGlobalVenvDir()}. Reload VS Code when done.`,
-        'Reload Now',
-      ).then((a) => { if (a === 'Reload Now') { void vscode.commands.executeCommand('workbench.action.reloadWindow'); } });
+      // Show persistent restart banner in the panel instead of a transient popup
+      _panel?.webview.postMessage({ type: 'showRestartBanner', message: `✓ Creating environment at ${getGlobalVenvDir()}. Restart VS Code when the terminal finishes.` });
       break;
     }
 
@@ -152,7 +151,7 @@ async function _handleMsg(msg: Msg): Promise<void> {
       const term2 = vscode.window.createTerminal({ name: 'specsmith: update env', shellPath: _shellPath() });
       term2.sendText(buildUpdateVenvCommand(ch2));
       term2.show();
-      _panel?.webview.postMessage({ type: 'installStarted' });
+      _panel?.webview.postMessage({ type: 'showRestartBanner', message: '✓ Updating environment… Restart VS Code when the terminal finishes.' });
       break;
     }
 
@@ -165,8 +164,7 @@ async function _handleMsg(msg: Msg): Promise<void> {
       const delTerm = vscode.window.createTerminal({ name: 'specsmith: delete env', shellPath: _shellPath() });
       delTerm.sendText(buildDeleteVenvCommands().join('; '));
       delTerm.show();
-      void vscode.window.showInformationMessage('Environment deleted. Reload VS Code to reflect the change.', 'Reload Now')
-        .then((a) => { if (a === 'Reload Now') { void vscode.commands.executeCommand('workbench.action.reloadWindow'); } });
+      _panel?.webview.postMessage({ type: 'showRestartBanner', message: '⚠ Environment deleted. Restart VS Code to reflect the change.' });
       break;
     }
 
@@ -186,8 +184,35 @@ async function _handleMsg(msg: Msg): Promise<void> {
       const rbTerm = vscode.window.createTerminal({ name: 'specsmith: rebuild env', shellPath: _shellPath() });
       rbTerm.sendText([...buildDeleteVenvCommands(), ...buildCreateVenvCommands(chRb, providersRb)].join('; '));
       rbTerm.show();
-      void vscode.window.showInformationMessage('Rebuilding environment. Reload VS Code when done.', 'Reload Now')
-        .then((a) => { if (a === 'Reload Now') { void vscode.commands.executeCommand('workbench.action.reloadWindow'); } });
+      _panel?.webview.postMessage({ type: 'showRestartBanner', message: '✓ Rebuilding environment… Restart VS Code when the terminal finishes.' });
+      break;
+    }
+
+    case 'removeOtherInstalls': {
+      const confirmRm = await vscode.window.showWarningMessage(
+        'Remove all system-wide specsmith installs (pipx + pip) except the environment at ~/.specsmith/venv?\n\nThis runs: pipx uninstall specsmith; python -m pip uninstall -y specsmith',
+        { modal: true }, 'Remove System Installs',
+      );
+      if (confirmRm !== 'Remove System Installs') { break; }
+      const cleanCmd = process.platform === 'win32'
+        ? [
+            "Write-Host 'Removing specsmith from pipx...';",
+            'pipx uninstall specsmith 2>&1 | Out-Null;',
+            "Write-Host 'Removing specsmith from pip (user/system)...';",
+            'python -m pip uninstall -y specsmith 2>&1 | Out-Null;',
+            `Write-Host 'Done. Only the venv at ${getGlobalVenvDir()} is preserved.'`,
+          ].join(' ')
+        : [
+            "echo 'Removing specsmith from pipx...'",
+            'pipx uninstall specsmith 2>/dev/null',
+            "echo 'Removing specsmith from pip...'",
+            'python3 -m pip uninstall -y specsmith 2>/dev/null',
+            `echo 'Done. Only the venv at ${getGlobalVenvDir()} is preserved.'`,
+          ].join('; ');
+      const rmTerm = vscode.window.createTerminal({ name: 'specsmith: remove system installs', shellPath: _shellPath() });
+      rmTerm.sendText(cleanCmd);
+      rmTerm.show();
+      _panel?.webview.postMessage({ type: 'showRestartBanner', message: '✓ System installs removed. Restart VS Code to apply.' });
       break;
     }
 
@@ -445,6 +470,15 @@ function _html(data: SettingsData): string {
   td{padding:3px 7px;border-bottom:1px solid var(--br)}
   .dim{color:var(--dim);font-size:11px}
   select{background:var(--ib);color:var(--if);border:1px solid var(--br);border-radius:3px;padding:2px 5px;font-size:11px;font-family:var(--fn)}
+  /* Persistent restart banner */
+  #restart-banner{display:none;align-items:center;justify-content:space-between;gap:10px;
+    padding:8px 12px;background:rgba(78,201,176,.12);border-bottom:2px solid var(--teal);
+    font-size:11px;color:var(--teal);flex-shrink:0;flex-wrap:wrap}
+  #restart-banner.show{display:flex}
+  #restart-banner button{background:var(--teal);color:#000;border:none;border-radius:3px;
+    padding:3px 9px;cursor:pointer;font-size:11px;font-weight:700;white-space:nowrap}
+  #restart-banner .dismiss{background:none;border:1px solid var(--br);color:var(--dim);font-weight:400}
+  #restart-banner .dismiss:hover{border-color:var(--teal);color:var(--teal)}
 </style></head>
 <body>
 <div class="topbar">
@@ -452,6 +486,14 @@ function _html(data: SettingsData): string {
   <button class="btn-sm" onclick="refresh()">&#x21BA; Refresh</button>
 </div>
 ${upd ? `<div class="upd-banner">\u2b06 specsmith <b>${data.availableVersion}</b> available (installed <b>${data.installedVersion}</b>) &mdash; <button class="tb" style="border-color:var(--teal);color:var(--teal)" onclick="sw('env')">View Update</button></div>` : ''}
+<!-- Persistent restart banner — shown after env operations instead of a dismissible popup -->
+<div id="restart-banner">
+  <span id="restart-msg">✓ Operation complete. Restart VS Code to apply changes.</span>
+  <div style="display:flex;gap:6px">
+    <button onclick="vscode.postMessage({command:'reloadWindow'})">↺ Restart VS Code</button>
+    <button class="dismiss" onclick="document.getElementById('restart-banner').classList.remove('show')">Dismiss</button>
+  </div>
+</div>
 <div class="tab-bar">
   <button class="tab active" onclick="sw('env')">&#x1f527; Environment${upd ? '<span class="badge">UPD</span>' : ''}</button>
   <button class="tab" onclick="sw('ollama')">&#x1f916; Ollama</button>
@@ -477,7 +519,8 @@ ${upd ? `<div class="upd-banner">\u2b06 specsmith <b>${data.availableVersion}</b
   ${data.venvActive
     ? `<button class="btn-sm" onclick="updateVenv()">\u2b06 Update</button>
        <button class="btn-sm" onclick="rebuildVenv()" title="Delete and recreate from scratch">\uD83D\uDD04 Rebuild</button>
-       <button class="btn-sm tb-red" onclick="deleteVenv()" title="Delete environment">\uD83D\uDDD1 Delete</button>`
+       <button class="btn-sm tb-red" onclick="deleteVenv()" title="Delete environment">\uD83D\uDDD1 Delete</button>
+       <button class="btn-sm" style="margin-left:8px;border-color:var(--amb);color:var(--amb)" onclick="removeOtherInstalls()" title="Remove specsmith from pipx/pip, keeping only this environment">\uD83E\uDDF9 Remove System Installs</button>`
     : `<button class="btn btn-upd" onclick="createVenv()">\uD83D\uDD12 Create Environment</button>`
   }
 </div>
@@ -547,6 +590,7 @@ function createVenv(){vscode.postMessage({command:'createVenv'})}
 function updateVenv(){vscode.postMessage({command:'updateVenv'})}
 function deleteVenv(){vscode.postMessage({command:'deleteVenv'})}
 function rebuildVenv(){vscode.postMessage({command:'rebuildVenv'})}
+function removeOtherInstalls(){vscode.postMessage({command:'removeOtherInstalls'})}
 function saveChannel(ch){vscode.postMessage({command:'setReleaseChannel',channel:ch})}
 function chkVer(){
   const btn=document.getElementById('chk-btn');
@@ -625,6 +669,15 @@ window.addEventListener('message',({data})=>{
     document.getElementById('ollama-chk-btn').textContent='\uD83D\uDD0D Check Ollama';
     document.getElementById('ollama-ver').textContent=data.installed||'(not running)';
     document.getElementById('ollama-latest').textContent=data.latest?(data.installed&&data.latest!==data.installed?data.latest+' \u2190 update available':data.latest+' \u2713 up to date'):'(could not check)';
+  }
+  if(data.type==='showRestartBanner'){
+    // Show persistent restart banner — stays visible until user restarts or dismisses
+    const banner=document.getElementById('restart-banner');
+    const msg=document.getElementById('restart-msg');
+    if(banner&&msg){
+      msg.textContent=data.message||'\u2713 Operation complete. Restart VS Code to apply changes.';
+      banner.classList.add('show');
+    }
   }
 });
 // Auto-load sys info on open

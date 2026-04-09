@@ -19,12 +19,23 @@ import { fetchModels } from './ModelRegistry';
 import { OllamaManager, TASK_SUGGESTIONS } from './OllamaManager';
 import { SessionStatus } from './types';
 import { promptAndReportBug } from './BugReporter';
+import { setVenvDir } from './VenvManager';
 
 // ── Activation ────────────────────────────────────────────────────────────────
 
 export function activate(context: vscode.ExtensionContext): void {
 
-  // ── Sidebar: unified Projects (includes file tree + governance) ───────────
+  // Apply custom venv path from settings immediately so all modules pick it up
+  const _applyVenvPath = () =>
+    setVenvDir(vscode.workspace.getConfiguration('specsmith').get<string>('envPath', ''));
+  _applyVenvPath();
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration('specsmith.envPath')) { _applyVenvPath(); }
+    }),
+  );
+
+  // ── Sidebar: unified Projects
   const projectTree = new ProjectTreeProvider(context);
   const projectView = vscode.window.createTreeView('specsmith.projects', {
     treeDataProvider: projectTree,

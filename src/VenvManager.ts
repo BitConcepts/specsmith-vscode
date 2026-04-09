@@ -18,8 +18,22 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
+// ── Custom venv path (set from specsmith.envPath VS Code setting) ──────────────
+
+/** Module-level override. Empty = use the default ~/.specsmith/venv. */
+let _customVenvDir = '';
+
+/**
+ * Set a custom venv location.  Call this from extension.ts whenever
+ * specsmith.envPath changes so all VenvManager functions pick it up.
+ */
+export function setVenvDir(dir: string): void {
+  _customVenvDir = (dir ?? '').trim();
+}
+
 /** Absolute path to the global specsmith venv root. */
 export function getGlobalVenvDir(): string {
+  if (_customVenvDir) { return _customVenvDir; }
   return path.join(os.homedir(), '.specsmith', 'venv');
 }
 
