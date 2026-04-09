@@ -433,11 +433,12 @@ function _html(data: SettingsData): string {
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';">
 <title>specsmith Settings</title>
 <style>
-  :root{--bg:var(--vscode-editor-background);
+  :root{--bg:var(--vscode-editor-background);--fg:var(--vscode-editor-foreground);
     --sf:var(--vscode-panel-background,#1e1e2e);--br:var(--vscode-panel-border,#313244);
     --ib:var(--vscode-input-background);--if:var(--vscode-input-foreground);
     --bb:var(--vscode-button-background);--bf:var(--vscode-button-foreground);
-    --teal:#4ec9b0;--red:#f44747;--grn:#4ec94e;--amb:#ce9178;--dim:#7f849c;
+    --teal:#4ec9b0;--red:#f44747;--grn:#4ec94e;--amb:#ce9178;
+    --dim:var(--vscode-descriptionForeground,#9d9d9d);
     --fn:var(--vscode-font-family,'Segoe UI',system-ui,sans-serif);}
   *{box-sizing:border-box;margin:0;padding:0}
   body{background:var(--bg);color:var(--fg);font-family:var(--fn);font-size:13px;display:flex;flex-direction:column;height:100vh;overflow:hidden}
@@ -460,11 +461,11 @@ function _html(data: SettingsData): string {
   .btn-rel:hover{background:rgba(78,201,176,.32)}
   .tb{background:rgba(255,255,255,.03);border:1px solid var(--br);border-radius:3px;color:var(--fg);padding:2px 8px;cursor:pointer;font-size:10px;opacity:.85}
   .tb:hover{border-color:var(--teal);color:var(--teal);opacity:1}
-  .tb-red{color:var(--red)!important;border-color:var(--red)!important}
+  .tb-red{color:var(--red)!important;border-color:var(--red)!important;background:rgba(244,71,71,.08)!important}
   .ver-grid{display:grid;grid-template-columns:100px 1fr;gap:4px 8px;font-size:12px;margin-bottom:10px}
-  .ver-lbl{color:var(--dim)}.ver-val{font-weight:600}
+  .ver-lbl{color:var(--dim)}.ver-val{font-weight:600;color:var(--fg)}
   .sys-grid{display:grid;grid-template-columns:80px 1fr;gap:3px 8px;font-size:11px;margin-top:6px}
-  .sys-lbl{color:var(--dim)}.sys-val{font-family:var(--vscode-editor-font-family,'Cascadia Code',monospace)}
+  .sys-lbl{color:var(--dim)}.sys-val{color:var(--fg);font-family:var(--vscode-editor-font-family,'Cascadia Code',monospace)}
   .badge{display:inline-block;background:rgba(78,201,176,.2);color:var(--teal);border-radius:10px;padding:1px 7px;font-size:9px;font-weight:700;margin-left:4px}
   .info-box{background:rgba(78,201,176,.06);border:1px solid rgba(78,201,176,.25);border-radius:4px;padding:7px 10px;font-size:11px;color:var(--teal);margin-bottom:8px}
   .warn-box{background:rgba(244,71,71,.08);border:1px solid rgba(244,71,71,.3);border-radius:4px;padding:7px 10px;font-size:11px;color:var(--red);margin-bottom:8px}

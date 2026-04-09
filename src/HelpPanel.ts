@@ -156,12 +156,49 @@ function _html(): string {
 <p>The bar below the chat shows context fill percentage for the current model's context window. Colors:</p>
 <p>🟢 &lt;70% — healthy | 🟡 70–90% — warning (optimization banner shown) | 🔴 &gt;90% — critical</p>
 
+<h2>AEE Project Lifecycle — 7 Phases</h2>
+<p>Every specsmith project follows the Applied Epistemic Engineering lifecycle:</p>
+<table>
+  <tr><th>#</th><th>Phase</th><th>What You Do</th><th>Gate (must pass before advancing)</th></tr>
+  <tr><td>1</td><td>🌱 Inception</td><td>Set up scaffold.yml, AGENTS.md, project type</td><td>scaffold.yml + AGENTS.md + LEDGER.md exist</td></tr>
+  <tr><td>2</td><td>🏗 Architecture</td><td>Write ARCHITECTURE.md, define components</td><td>ARCHITECTURE.md ≥20 lines, trace vault has ≥1 seal</td></tr>
+  <tr><td>3</td><td>📋 Requirements</td><td>Populate REQUIREMENTS.md, stress-test</td><td>≥5 formal REQ-* entries, TEST_SPEC.md exists</td></tr>
+  <tr><td>4</td><td>✅ Test Spec</td><td>Write TEST_SPEC.md mapping to requirements</td><td>≥80% REQ coverage in TEST_SPEC.md</td></tr>
+  <tr><td>5</td><td>⚙ Implementation</td><td>Code → commit → audit → ledger loop</td><td>LEDGER.md has content, TEST_SPEC.md exists</td></tr>
+  <tr><td>6</td><td>🔬 Verification</td><td>Epistemic audit, trace vault sealed</td><td>Trace vault has seals, ≥80% coverage</td></tr>
+  <tr><td>7</td><td>🚀 Release</td><td>CHANGELOG, tag, compliance report</td><td>CHANGELOG.md has version entry</td></tr>
+</table>
+<div class="tip">
+  <strong>How to advance:</strong> Open the <strong>Project Settings</strong> panel — the phase bar shows your current position and readiness %. Click <strong>→ Next</strong> when all checks pass, or use <code>specsmith phase next</code> in the terminal.
+</div>
+
+<h2>AI-Guided Sessions</h2>
+<p>The <strong>Actions</strong> tab in Project Settings shows prompts tailored to your current lifecycle phase. Click <strong>🤖 Start AI-Guided Session</strong> for a comprehensive walkthrough of the current phase — the AI will guide you step by step through the required artifacts.</p>
+<p>You can also choose <strong>manual mode</strong>: use the individual phase prompts to do specific tasks at your own pace.</p>
+
 <h2>Architecture</h2>
 <p>The extension spawns <code>specsmith run --json-events</code> as a child process per session. Communication: user messages go to <strong>stdin</strong> (one line each); structured events come from <strong>stdout</strong> as newline-delimited JSON.</p>
 <p>All AI logic lives in the Python CLI — the extension is a pure UI layer with no embedded LLM calls.</p>
 
+<h2>Documentation &amp; Learning</h2>
+<table>
+  <tr><th>Resource</th><th>What You’ll Learn</th></tr>
+  <tr><td><a href="https://specsmith.readthedocs.io/en/latest/aee-primer/">AEE Primer (Full Guide)</a></td><td>Applied Epistemic Engineering from zero to productive</td></tr>
+  <tr><td><a href="https://specsmith.readthedocs.io/en/latest/epistemic-library/">epistemic Library</a></td><td>Standalone Python library for belief engineering</td></tr>
+  <tr><td><a href="https://specsmith.readthedocs.io/en/latest/governance/">Governance Model</a></td><td>Closed-loop workflow, file hierarchy, modular governance</td></tr>
+  <tr><td><a href="https://specsmith.readthedocs.io/en/latest/commands/">CLI Commands</a></td><td>Every specsmith command with options and examples</td></tr>
+  <tr><td><a href="https://specsmith.readthedocs.io/en/latest/vscode-extension/">VS Code Extension</a></td><td>Full extension documentation (panels, shortcuts, config)</td></tr>
+  <tr><td><a href="https://specsmith.readthedocs.io/en/latest/project-types/">Project Types</a></td><td>All 35+ project types with tools and governance rules</td></tr>
+  <tr><td><a href="https://specsmith.readthedocs.io/en/latest/importing/">Importing Projects</a></td><td>How detection works, merge behavior, type inference</td></tr>
+  <tr><td><a href="https://specsmith.readthedocs.io/en/latest/troubleshooting/">Troubleshooting</a></td><td>Common issues and solutions</td></tr>
+</table>
+
 <h2>Links</h2>
-<p><a href="https://github.com/BitConcepts/specsmith">specsmith on GitHub</a> · <a href="https://github.com/BitConcepts/specsmith-vscode">Extension on GitHub</a></p>
+<p>
+  <a href="https://specsmith.readthedocs.io">specsmith Documentation</a> ·
+  <a href="https://github.com/BitConcepts/specsmith">specsmith on GitHub</a> ·
+  <a href="https://github.com/BitConcepts/specsmith-vscode">Extension on GitHub</a>
+</p>
 </body>
 </html>`;
 }

@@ -246,17 +246,64 @@ const GOV_FILES = [
   { rel: 'LEDGER.md',            label: 'LEDGER.md',                addType: 'ledger'       },
 ];
 
-const PROMPTS = [
-  { label: '📋 Review requirements',  prompt: 'Review REQUIREMENTS.md and identify gaps, ambiguities, or missing test coverage.' },
+// Phase-aware prompts — shown in Actions tab based on current lifecycle phase
+const PHASE_PROMPTS: Record<string, Array<{ label: string; prompt: string }>> = {
+  inception: [
+    { label: '🔍 Run initial audit',      prompt: 'Run specsmith audit --fix. Report what was created or fixed.' },
+    { label: '🔭 Scan & configure project', prompt: 'Run specsmith scan to detect project type, languages, and tools. Then update scaffold.yml.' },
+    { label: '📝 Initialize LEDGER',       prompt: 'Create the first LEDGER.md entry documenting the project import/init.' },
+  ],
+  architecture: [
+    { label: '🏗 Generate ARCHITECTURE.md', prompt: 'Run specsmith architect --non-interactive. Then review and enrich docs/ARCHITECTURE.md with components, interfaces, and data flow.' },
+    { label: '📐 Define components',        prompt: 'Read the codebase and define major components, their responsibilities, and interfaces in docs/ARCHITECTURE.md.' },
+    { label: '🔏 Seal architecture decision', prompt: 'Run specsmith trace seal decision "Architecture established". This records the decision in the trace vault.' },
+  ],
+  requirements: [
+    { label: '📋 Populate REQUIREMENTS.md', prompt: 'Generate formal requirements (REQ-*) in docs/REQUIREMENTS.md based on ARCHITECTURE.md and the codebase. Each must be testable.' },
+    { label: '⚡ Stress-test requirements',  prompt: 'Run specsmith stress-test on REQUIREMENTS.md. Report failure modes and low-confidence items.' },
+    { label: '⚠ Find requirement gaps',     prompt: 'Run specsmith req gaps. Identify missing requirements and propose new REQ-* entries.' },
+    { label: '🧠 Epistemic audit',          prompt: 'Run specsmith epistemic-audit. Report equilibrium status and any logic knots.' },
+  ],
+  test_spec: [
+    { label: '✅ Generate TEST_SPEC.md',    prompt: 'Generate TEST_SPEC.md with TEST-* IDs mapping to REQ-* IDs. Aim for ≥80% coverage.' },
+    { label: '📊 Check REQ ↔ TEST coverage', prompt: 'Check that every accepted requirement has a corresponding test in TEST_SPEC.md. Report gaps.' },
+    { label: '🔍 Validate traceability',    prompt: 'Run specsmith validate. Verify REQ→TEST→ARCH traceability chain is complete.' },
+  ],
+  implementation: [
+    { label: '🔍 Audit & fix',             prompt: 'Run specsmith audit --fix. Report what changed.' },
+    { label: '📝 Write LEDGER entry',       prompt: 'Write a LEDGER.md entry: what changed, what was verified, next steps, open TODOs.' },
+    { label: '💾 Commit with governance',   prompt: 'Run specsmith commit to audit and commit with governance checks.' },
+    { label: '📋 List open requirements',   prompt: 'Run specsmith req list. Show which requirements are implemented vs. pending.' },
+  ],
+  verification: [
+    { label: '🧠 Full epistemic audit',     prompt: 'Run specsmith epistemic-audit. Verify equilibrium: all beliefs stress-tested, certainty ≥0.7, no logic knots.' },
+    { label: '⚡ Stress-test all',           prompt: 'Run specsmith stress-test. Adversarial challenges against all requirements.' },
+    { label: '📦 Export compliance report', prompt: 'Run specsmith export and save the report to docs/COMPLIANCE.md.' },
+    { label: '🔏 Seal verification',        prompt: 'Run specsmith trace seal audit-gate "Verification complete".' },
+  ],
+  release: [
+    { label: '📦 Export final report',      prompt: 'Run specsmith export --output docs/COMPLIANCE.md. Generate the final compliance report.' },
+    { label: '📝 Update CHANGELOG',         prompt: 'Create or update CHANGELOG.md with the current version entry. List features, fixes, and breaking changes.' },
+    { label: '🔏 Seal release milestone',   prompt: 'Run specsmith trace seal milestone "v<version> released". Then run specsmith push.' },
+  ],
+};
+
+// AI-Guided prompts — comprehensive interactive sessions per phase
+const GUIDED_PROMPTS: Record<string, string> = {
+  inception:      'I want to set up this project with specsmith governance. Walk me through: 1) Verify scaffold.yml is correct, 2) Run specsmith audit --fix, 3) Review AGENTS.md, 4) Write the first LEDGER.md entry. Ask me questions about the project as needed.',
+  architecture:   'Guide me through defining the architecture. 1) Analyze the codebase structure, 2) Run specsmith architect if available, 3) Write/update docs/ARCHITECTURE.md with components, interfaces, and data flow, 4) Seal the architecture decision in the trace vault.',
+  requirements:   'Guide me through requirements gathering. 1) Read ARCHITECTURE.md, 2) Propose formal REQ-* requirements in docs/REQUIREMENTS.md, 3) Stress-test each requirement, 4) Run specsmith epistemic-audit to check equilibrium. Ask me to validate each requirement.',
+  test_spec:      'Guide me through test specification. 1) Read REQUIREMENTS.md, 2) Generate TEST-* entries in docs/TEST_SPEC.md covering all P1 requirements, 3) Run specsmith validate to check coverage ≥80%, 4) Identify and fill any gaps.',
+  implementation: 'I want to implement the next task. 1) Read LEDGER.md for open TODOs, 2) Propose a bounded task, 3) Implement it, 4) Run verification tools, 5) Write a LEDGER.md entry, 6) Commit with specsmith commit.',
+  verification:   'Guide me through verification. 1) Run specsmith epistemic-audit, 2) Run specsmith stress-test, 3) Check all P1 requirements have passing tests, 4) Run specsmith export, 5) Seal the trace vault when everything passes.',
+  release:        'Guide me through the release process. 1) Verify CHANGELOG.md is updated, 2) Run specsmith export for final compliance report, 3) Seal the release milestone in trace vault, 4) Create the release tag, 5) Push with specsmith push.',
+};
+
+// Universal prompts always available regardless of phase
+const ALWAYS_PROMPTS = [
   { label: '🔍 Run full audit',        prompt: 'Run specsmith audit and fix any issues found. Report exactly what changed.' },
-  { label: '✅ Check REQ coverage',    prompt: 'Check that every requirement has a corresponding test in TEST_SPEC.md.' },
-  { label: '📐 Improve ARCHITECTURE', prompt: 'Review docs/ARCHITECTURE.md and update it based on the current codebase.' },
-  { label: '📝 Update LEDGER',         prompt: 'Write a LEDGER.md entry: what changed, what was tested, next steps, open TODOs.' },
-  { label: '🧠 Epistemic audit',       prompt: 'Run specsmith epistemic-audit. Report low-confidence requirements.' },
-  { label: '⚡ Stress test REQs',      prompt: 'Run specsmith stress-test on REQUIREMENTS.md. Report failure modes.' },
   { label: '🔄 Upgrade governance',    prompt: 'Run specsmith upgrade to the latest spec version. Report what changed.' },
-  { label: '📦 Export compliance',     prompt: 'Run specsmith export and save the report to docs/COMPLIANCE.md.' },
-  { label: '🏗 Generate architecture', prompt: 'Run specsmith architect --non-interactive and update docs/ARCHITECTURE.md.' },
+  { label: '📝 Update LEDGER',         prompt: 'Write a LEDGER.md entry: what changed, what was tested, next steps, open TODOs.' },
 ];
 
 // ── Data loading ───────────────────────────────────────────────────────────────
@@ -821,7 +868,14 @@ function _html(data: ProjectData): string {
       `<td><button class="add-btn" onclick="addFile('${f.addCmd ?? f.rel}')">${f.addCmd === 'rename' ? 'Rename' : 'Add'}</button></td></tr>`
   ).join('');
 
-  const prompts = PROMPTS.map(p =>
+  // Build phase-aware prompt HTML (must be done outside the template literal)
+  const _guidedLabel = (() => { const c = PHASE_CATALOG[data.phase.key]; return c ? c.emoji + ' ' + c.label : data.phase.label; })();
+  const _guidedPrompt = JSON.stringify(GUIDED_PROMPTS[data.phase.key] ?? GUIDED_PROMPTS.inception);
+  const _guidedBtn = `<button class="pb" style="background:rgba(78,201,176,.1);border-color:var(--teal);font-weight:600" onclick="sendToAgent(${_guidedPrompt})">\uD83E\uDD16 Start AI-Guided ${data.phase.label} Session</button>`;
+  const _phasePromptsHtml = (PHASE_PROMPTS[data.phase.key] ?? []).map(p =>
+    `<button class="pb" onclick="sendToAgent(${JSON.stringify(p.prompt)})">${p.label}</button>`
+  ).join('');
+  const _alwaysPromptsHtml = ALWAYS_PROMPTS.map(p =>
     `<button class="pb" onclick="sendToAgent(${JSON.stringify(p.prompt)})">${p.label}</button>`
   ).join('');
 
@@ -834,7 +888,8 @@ function _html(data: ProjectData): string {
     --sf:var(--vscode-panel-background,#1e1e2e);--br:var(--vscode-panel-border,#313244);
     --ib:var(--vscode-input-background);--if:var(--vscode-input-foreground);
     --bb:var(--vscode-button-background);--bf:var(--vscode-button-foreground);
-    --teal:#4ec9b0;--red:#f44747;--grn:#4ec94e;--amb:#ce9178;--dim:#7f849c;
+    --teal:#4ec9b0;--red:#f44747;--grn:#4ec94e;--amb:#ce9178;
+    --dim:var(--vscode-descriptionForeground,#9d9d9d);
     --fn:var(--vscode-font-family,'Segoe UI',system-ui,sans-serif);}
   *{box-sizing:border-box;margin:0;padding:0}
   body{background:var(--bg);color:var(--fg);font-family:var(--fn);font-size:13px;
@@ -898,9 +953,9 @@ function _html(data: ProjectData): string {
   .info-box{background:rgba(78,201,176,.06);border:1px solid rgba(78,201,176,.25);
             border-radius:4px;padding:7px 10px;font-size:11px;color:var(--teal);margin-bottom:8px}
   .ver-grid{display:grid;grid-template-columns:100px 1fr;gap:4px 8px;font-size:12px;margin-bottom:10px}
-  .ver-lbl{color:var(--dim)}.ver-val{font-weight:600}
+  .ver-lbl{color:var(--dim)}.ver-val{font-weight:600;color:var(--fg)}
   .sys-grid{display:grid;grid-template-columns:80px 1fr;gap:3px 8px;font-size:11px;margin-top:6px}
-  .sys-lbl{color:var(--dim)}.sys-val{font-family:var(--vscode-editor-font-family,'Cascadia Code',monospace)}
+  .sys-lbl{color:var(--dim)}.sys-val{color:var(--fg);font-family:var(--vscode-editor-font-family,'Cascadia Code',monospace)}
   .badge{display:inline-block;background:rgba(78,201,176,.2);color:var(--teal);
          border-radius:10px;padding:1px 7px;font-size:9px;font-weight:700;margin-left:4px}
   .filter-in{font-size:11px;padding:3px 6px;margin-bottom:4px;width:100%}
@@ -1069,8 +1124,12 @@ Profile is stored in <b>scaffold.yml</b> as <code>execution_profile</code>.</div
   <button class="qa-btn" onclick="runCmd('tools scan --fpga')">🔧 tools scan</button>
   <button class="qa-btn" onclick="runCmd('phase show')">\uD83D\uDCCA Lifecycle Status</button>
 </div>
-<h3>AI Prompt Palette</h3>
-${prompts}
+<h3>\uD83E\uDD16 AI-Guided (${_guidedLabel})</h3>
+${_guidedBtn}
+<h3>Phase Prompts</h3>
+${_phasePromptsHtml}
+<h3>Always Available</h3>
+${_alwaysPromptsHtml}
 </div>
 </div><!-- scroll -->
 
