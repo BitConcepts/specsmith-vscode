@@ -26,13 +26,14 @@ let _panel: vscode.WebviewPanel | undefined;
 let _ctx: vscode.ExtensionContext | undefined;
 
 /** Reuse a single terminal for all specsmith operations to avoid terminal sprawl. */
-function _getTerminal(name: string): vscode.Terminal {
+function _getTerminal(_name: string): vscode.Terminal {
   const existing = vscode.window.terminals.find(t => t.name === 'specsmith');
   if (existing) {
     existing.show();
     return existing;
   }
-  const term = _getTerminal("specsmith");
+  const term = vscode.window.createTerminal({ name: 'specsmith', shellPath: _shellPath() });
+  term.show();
   return term;
 }
 
