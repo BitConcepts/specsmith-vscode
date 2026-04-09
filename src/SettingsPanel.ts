@@ -125,14 +125,12 @@ async function _handleMsg(msg: Msg): Promise<void> {
     case 'checkVersion': await _checkVersion(_ctx); break;
 
     case 'installUpdate': {
-      const channel = vscode.workspace.getConfiguration('specsmith').get<string>('releaseChannel', 'stable');
-      const isPre = channel === 'pre-release';
-      const upgradeCmd = isPre
-        ? 'pipx install specsmith --pip-args="--pre" --force; pip install --pre --upgrade specsmith'
-        : 'pipx upgrade specsmith; pip install --upgrade specsmith';
-      const term = vscode.window.createTerminal({ name: 'specsmith upgrade', shellPath: _shellPath() });
-      term.sendText(upgradeCmd);
+      // Use the venv update mechanism (same as the Environment tab's Update button)
+      const ch = vscode.workspace.getConfiguration('specsmith').get<string>('releaseChannel', 'stable') as 'stable' | 'pre-release';
+      const term = vscode.window.createTerminal({ name: 'specsmith: update env', shellPath: _shellPath() });
+      term.sendText(buildUpdateVenvCommand(ch));
       term.show();
+      _panel?.webview.postMessage({ type: 'showRestartBanner', message: '✓ Updating environment… Restart VS Code when the terminal finishes.' });
       _panel?.webview.postMessage({ type: 'installStarted' });
       break;
     }

@@ -638,9 +638,21 @@ export class SessionPanel implements vscode.Disposable {
   }
 
   private async _refreshModels(provider: string): Promise<void> {
-    const key    = await ApiKeyManager.getKey(this._secrets, provider);
-    const models = await fetchModels(provider, key);
-    void this._panel.webview.postMessage({ type: 'models', models } satisfies SpecsmithEvent);
+    try {
+      const key    = await ApiKeyManager.getKey(this._secrets, provider);
+      const models = await fetchModels(provider, key);
+      if (models.length > 0) {
+        void this._panel.webview.postMessage({ type: 'models', models } satisfies SpecsmithEvent);
+      } else {
+        // Live fetch returned empty — use static fallback
+        const fallback = getStaticModels(provider);
+        void this._panel.webview.postMessage({ type: 'models', models: fallback } satisfies SpecsmithEvent);
+      }
+    } catch {
+      // API error — use static fallback
+      const fallback = getStaticModels(provider);
+      void this._panel.webview.postMessage({ type: 'models', models: fallback } satisfies SpecsmithEvent);
+    }
   }
 
   // ── Settings persistence

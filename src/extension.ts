@@ -505,75 +505,11 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     vscode.commands.registerCommand('specsmith.installOrUpgrade', async () => {
-      const cfg      = vscode.workspace.getConfiguration('specsmith');
-      const execPath = cfg.get<string>('executablePath', 'specsmith');
-      const version  = _probeVersion(execPath);
-      const isInstalled = version !== null;
-      // Detect if the running version is a dev/pre-release build
-      const isDevVersion = version?.includes('.dev') || version?.includes('a') || version?.includes('b') || version?.includes('rc');
-
-      const items: vscode.QuickPickItem[] = [];
-
-      if (isInstalled) {
-        items.push(
-          {
-            label:       '$(arrow-up) Upgrade to latest stable',
-            description: `pipx upgrade specsmith`,
-            detail:      `Current: ${version} → latest stable release from PyPI`,
-          },
-          {
-            label:       '$(beaker) Upgrade to latest dev (pre-release)',
-            description: `pipx install specsmith --pip-args="--pre" --force`,
-            detail:      'Installs the newest 0.x.y.devN build — cutting-edge, may have rough edges',
-          },
-          {
-            label:       '$(info) Copy specsmith path to clipboard',
-            description: execPath,
-            detail:      'Use if you need to configure the extension manually',
-          },
-        );
-      } else {
-        items.push(
-          {
-            label:       '$(cloud-download) Install specsmith (stable)',
-            description: 'pipx install specsmith',
-            detail:      'Recommended. Installs the latest stable release.',
-          },
-          {
-            label:       '$(beaker) Install specsmith (dev / pre-release)',
-            description: 'pipx install specsmith --pip-args="--pre"',
-            detail:      'Installs the latest dev build from PyPI.',
-          },
-        );
-      }
-
-      const picked = await vscode.window.showQuickPick(items, {
-        placeHolder: isInstalled
-          ? `specsmith ${version}${isDevVersion ? ' (dev)' : ''} installed — choose an action`
-          : 'specsmith not found — install it first',
-        matchOnDetail: true,
-      });
-      if (!picked) { return; }
-
-      if (picked.label.includes('clipboard')) {
-        await vscode.env.clipboard.writeText(execPath);
-        void vscode.window.showInformationMessage(`Copied: ${execPath}`);
-        return;
-      }
-
-      const term = vscode.window.createTerminal({ name: 'specsmith install', shellPath: _shellPath() });
-      term.show();
-      // Run the command exactly as shown in the description
-      term.sendText(picked.description ?? '');
-
+      // Always direct to Settings panel — updates should use the venv, not system pipx
+      void vscode.commands.executeCommand('specsmith.showSettings');
       void vscode.window.showInformationMessage(
-        'specsmith install/upgrade running in the terminal. Reload the window after it finishes.',
-        'Reload Now',
-      ).then((a) => {
-        if (a === 'Reload Now') {
-          void vscode.commands.executeCommand('workbench.action.reloadWindow');
-        }
-      });
+        'Use the Environment tab in specsmith Settings to update. This ensures the venv (not system-wide pipx) is used.',
+      );
     }),
   );
 
@@ -1040,11 +976,12 @@ async function _checkForSpecsmithUpdate(context: vscode.ExtensionContext): Promi
 
     const ans = await vscode.window.showInformationMessage(
       `specsmith update available: v${latest} (installed: ${current})`,
-      'Upgrade Now',
+      'Open Settings',
       'Later',
     );
-    if (ans === 'Upgrade Now') {
-      void vscode.commands.executeCommand('specsmith.installOrUpgrade');
+    if (ans === 'Open Settings') {
+      // Direct to Settings panel where Update button uses the venv
+      void vscode.commands.executeCommand('specsmith.showSettings');
     }
   } catch { /* silent — don't crash startup */ }
 }
