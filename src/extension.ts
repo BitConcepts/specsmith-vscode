@@ -376,6 +376,7 @@ export function activate(context: vscode.ExtensionContext): void {
   void _showFirstRunPrivacyNotice(context);
   void _startupFetchModels(context);
   void _checkForSpecsmithUpdate(context);
+  void _checkForOllamaUpdate();
   void _autoOpenGovernancePanel(context, openSession);
   void _notifyIfVenvMissing(context);
 
@@ -1012,6 +1013,57 @@ async function _checkForSpecsmithUpdate(context: vscode.ExtensionContext): Promi
       void vscode.commands.executeCommand('specsmith.showSettings');
     }
   } catch { /* silent — don't crash startup */ }
+}
+
+/** Check Ollama version + model staleness on startup.
+ *  Respects `specsmith.checkOllamaOnStart` setting (default: true). */
+async function _checkForOllamaUpdate(): Promise<void> {
+  const cfg = vscode.workspace.getConfiguration('specsmith');
+  if (cfg.get<boolean>('checkOllamaOnStart', true) === false) { return; }
+
+  await new Promise((r) => setTimeout(r, 8000)); // wait for startup to settle
+  try {
+    const { OllamaManager } = await import('./OllamaManager');
+    const running = await OllamaManager.isRunning();
+    if (!running) { return; } // Ollama not running
+
+    // Check Ollama version
+    const http = await import('http');
+    const installed = await new Promise<string | null>((resolve) => {
+      let d = '';
+      http.get('http://localhost:11434/api/version', (r) => {
+        r.on('data', (c: Buffer) => { d += c.toString(); });
+        r.on('end', () => { try { resolve((JSON.parse(d) as { version?: string }).version ?? null); } catch { resolve(null); } });
+      }).on('error', () => resolve(null));
+    });
+
+    // Check model staleness
+    const models = await new Promise<Array<{ name: string; modified_at: string }>>((resolve) => {
+      let d = '';
+      http.get('http://localhost:11434/api/tags', (r) => {
+        r.on('data', (c: Buffer) => { d += c.toString(); });
+        r.on('end', () => { try { resolve((JSON.parse(d) as { models?: Array<{ name: string; modified_at: string }> }).models ?? []); } catch { resolve([]); } });
+      }).on('error', () => resolve([]));
+    });
+
+    const STALE_MS = 30 * 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    const staleModels = models.filter(m => {
+      const pulled = m.modified_at ? new Date(m.modified_at).getTime() : 0;
+      return pulled > 0 && (now - pulled) > STALE_MS;
+    });
+
+    if (staleModels.length > 0) {
+      const ans = await vscode.window.showInformationMessage(
+        `${staleModels.length} Ollama model(s) may have updates (pulled > 30 days ago). Open Settings to update.`,
+        'Open Settings',
+        'Later',
+      );
+      if (ans === 'Open Settings') {
+        void vscode.commands.executeCommand('specsmith.showSettings');
+      }
+    }
+  } catch { /* silent */ }
 }
 
 /**
