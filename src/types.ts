@@ -20,7 +20,8 @@ export interface SpecsmithEvent {
     | 'history_user'     // previous session user message replay
     | 'history_agent'   // previous session agent message replay
     | 'tool_crash'      // critical tool failure — fail fast, ask to report
-    | 'vcs_state';      // synthetic: git branch + change count for VCS bar
+    | 'vcs_state'       // synthetic: git branch + change count for VCS bar
+    | 'proposal';       // synthetic: agent is asking for approval — show accept/reject buttons
 
   // ready
   provider?: string;

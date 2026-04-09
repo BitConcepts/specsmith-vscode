@@ -222,6 +222,19 @@ export class SessionPanel implements vscode.Disposable {
         // Background governance check — emit system messages for actionable issues
         setTimeout(() => this._checkGovernance(), 800);
       }
+      // Detect agent proposals and inject accept/reject buttons (host-side detection)
+      if (e.type === 'llm_chunk' && e.text) {
+        const t = e.text.toLowerCase();
+        if (t.includes('would you like') || t.includes('shall i proceed') ||
+            t.includes('ready to proceed') || t.includes('do you approve') ||
+            t.includes('would you like me to')) {
+          // Send a proposal event after the llm_chunk so buttons appear below the text
+          // If auto-accept was previously clicked, just send 'yes' automatically
+          setTimeout(() => {
+            void this._panel.webview.postMessage({ type: 'proposal' } satisfies SpecsmithEvent);
+          }, 100);
+        }
+      }
       void this._panel.webview.postMessage(e);
     });
     this._bridge.onStatus((s: SessionStatus) => {
@@ -1322,6 +1335,24 @@ window.addEventListener('message',({data})=>{switch(data.type){
       }
       i.focus();
     }break;
+  case 'proposal':{
+    var pd=document.createElement('div');
+    pd.style.cssText='display:flex;gap:6px;padding:4px 8px;align-self:flex-start';
+    var ab=document.createElement('button');
+    ab.textContent='\u2713 Accept';
+    ab.style.cssText='background:var(--bb);color:var(--bf);border:none;border-radius:4px;padding:3px 10px;cursor:pointer;font-size:11px;font-weight:600';
+    ab.onclick=function(){pd.remove();vscode.postMessage({command:'send',text:'yes, proceed'});};
+    var rb=document.createElement('button');
+    rb.textContent='\u2717 Reject';
+    rb.style.cssText='background:none;border:1px solid var(--br);color:var(--dim);border-radius:4px;padding:3px 10px;cursor:pointer;font-size:11px';
+    rb.onclick=function(){pd.remove();vscode.postMessage({command:'send',text:'no, skip this'});};
+    var aab=document.createElement('button');
+    aab.textContent='\u2713\u2713 Accept All';
+    aab.style.cssText='background:rgba(78,201,176,.15);border:1px solid var(--teal);color:var(--teal);border-radius:4px;padding:3px 10px;cursor:pointer;font-size:11px;font-weight:600';
+    aab.onclick=function(){pd.remove();window._ssAutoAccept=true;vscode.postMessage({command:'send',text:'yes, proceed with everything'});};
+    pd.appendChild(ab);pd.appendChild(rb);pd.appendChild(aab);
+    C.appendChild(pd);sb2();
+    break;}
 }});
 vscode.postMessage({command:'ready'});
 </script>
