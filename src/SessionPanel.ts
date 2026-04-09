@@ -457,33 +457,54 @@ export class SessionPanel implements vscode.Disposable {
     }
   }
 
-  /** Non-blocking governance check — emits system messages for detected issues. */
+  /** Non-blocking governance check — emits detailed messages and offers agent walkthrough. */
   private _checkGovernance(): void {
     const dir  = this._config.projectDir;
     const emit = (msg: string) =>
       void this._panel.webview.postMessage({ type: 'system', message: msg } satisfies SpecsmithEvent);
+    const issues: string[] = [];
 
     try {
-      // Duplicate requirements files: root REQUIREMENTS.md AND docs/REQUIREMENTS.md
-      const rootReq = path.join(dir, 'REQUIREMENTS.md');
-      const docsReq = path.join(dir, 'docs', 'REQUIREMENTS.md');
-      if (fs.existsSync(rootReq) && fs.existsSync(docsReq)) {
-        emit(
-          '\u26a0 Both REQUIREMENTS.md and docs/REQUIREMENTS.md exist. '
-          + 'docs/REQUIREMENTS.md is canonical — consider removing the root copy to avoid confusion.',
-        );
+      // No scaffold.yml
+      if (!fs.existsSync(path.join(dir, 'scaffold.yml'))) {
+        issues.push('scaffold.yml not found — run specsmith init or specsmith import');
+      }
+
+      // Missing key governance files
+      const required: Array<[string, string]> = [
+        ['AGENTS.md', 'specsmith import --project-dir .'],
+        ['LEDGER.md', 'specsmith audit --fix --project-dir .'],
+      ];
+      for (const [f, fix] of required) {
+        if (!fs.existsSync(path.join(dir, f))) {
+          issues.push(`${f} missing — fix: ${fix}`);
+        }
+      }
+
+      // Duplicate requirements
+      if (fs.existsSync(path.join(dir, 'REQUIREMENTS.md')) && fs.existsSync(path.join(dir, 'docs', 'REQUIREMENTS.md'))) {
+        issues.push('Both REQUIREMENTS.md and docs/REQUIREMENTS.md exist — docs/ version is canonical');
       }
 
       // Legacy lowercase architecture
-      const archLower = path.join(dir, 'docs', 'architecture.md');
-      const archUpper = path.join(dir, 'docs', 'ARCHITECTURE.md');
-      if (fs.existsSync(archLower) && !fs.existsSync(archUpper)) {
-        emit('\u26a0 docs/architecture.md exists but ARCHITECTURE.md does not. Run: specsmith upgrade --project-dir ".\'');
+      if (fs.existsSync(path.join(dir, 'docs', 'architecture.md')) && !fs.existsSync(path.join(dir, 'docs', 'ARCHITECTURE.md'))) {
+        issues.push('docs/architecture.md should be ARCHITECTURE.md — run specsmith upgrade');
       }
 
-      // No scaffold.yml
-      if (!fs.existsSync(path.join(dir, 'scaffold.yml'))) {
-        emit('\u26a0 scaffold.yml not found. Run specsmith init or specsmith import to set up governance.');
+      // Legacy WORKFLOW.md
+      if (fs.existsSync(path.join(dir, 'docs', 'governance', 'WORKFLOW.md'))) {
+        issues.push('docs/governance/WORKFLOW.md is legacy — run specsmith upgrade to migrate to SESSION-PROTOCOL.md');
+      }
+
+      if (issues.length > 0) {
+        emit(`⚠ Governance check found ${issues.length} issue(s):\n${issues.map(i => `  • ${i}`).join('\n')}`);
+        // Ask the agent to help fix the issues
+        setTimeout(() => {
+          this._bridge.send(
+            `[LANG:EN] The governance check found these issues:\n${issues.join('\n')}\n\n` +
+            'Walk me through fixing each one. For each issue, explain what\'s wrong and what command to run.',
+          );
+        }, 1500);
       }
     } catch { /* ignore — non-blocking */ }
   }
@@ -514,10 +535,25 @@ export class SessionPanel implements vscode.Disposable {
       const statusText = status.stdout.trim() || '(clean — no uncommitted changes)';
       const logText    = log.status === 0 ? log.stdout.trim() : '(no commits yet)';
 
+      // Get current branch
+      const branchResult = cp.spawnSync('git', ['branch', '--show-current'], {
+        cwd: dir, encoding: 'utf8', timeout: 3000,
+      });
+      const branch = branchResult.status === 0 ? branchResult.stdout.trim() : '';
+      const changeCount = status.stdout.trim().split('\n').filter((l: string) => l.trim()).length;
+
+      // Post structured VCS data for the bar
+      void this._panel.webview.postMessage({
+        type: 'vcs_state',
+        branch: branch || '(detached)',
+        changes: statusText === '(clean — no uncommitted changes)' ? 0 : changeCount,
+        projectDir: dir,
+      } satisfies SpecsmithEvent);
+
       // Format as a compact, readable snapshot
       const lines: string[] = [
         `📁 Project: ${dir}`,
-        `🔀 VCS: ${statusText}`,
+        `🔀 ${branch || '(detached HEAD)'}${changeCount > 0 ? ` · ${changeCount} change(s)` : ' · clean'}`,
         `🗃 Recent: ${logText.split('\n').join(' │ ')}`,
       ];
       emit(lines.join('\n'));
@@ -678,7 +714,7 @@ export class SessionPanel implements vscode.Disposable {
   .ab:hover{color:var(--teal);background:rgba(78,201,176,.1)}
   .iprev{max-width:100%;max-height:200px;border-radius:6px;border:1px solid var(--br);margin-top:4px}
   /* Drop overlay — only highlights the input bar, not the full window */
-  #ibar{display:flex;flex-direction:column;gap:4px;padding:6px 10px 8px;background:var(--sf);border-top:1px solid var(--br);flex-shrink:0;transition:border-top-color .15s,background .15s}
+  #ibar{display:flex;flex-direction:column;gap:4px;padding:6px 10px 8px;background:var(--sf);border-top:1px solid var(--br);border-bottom:2px solid var(--teal);flex-shrink:0;transition:border-top-color .15s,background .15s}
   #ibar.da{border-top:2px solid var(--teal);background:rgba(78,201,176,.06)}
   #dh{display:none;text-align:center;color:var(--teal);font-size:11px;padding:2px 0;font-style:italic}
   #ibar.da #dh{display:block}
@@ -703,6 +739,9 @@ export class SessionPanel implements vscode.Disposable {
   .tb2:hover:not(:disabled){border-color:var(--teal);color:var(--teal)}
   .tb2:disabled{opacity:.4;cursor:not-allowed}
   .kh{font-size:10px;color:var(--dim);margin-left:auto}
+  #vcsbar{display:flex;align-items:center;gap:8px;padding:2px 10px;background:var(--sf);border-top:1px solid var(--br);font-size:10px;color:var(--dim);flex-shrink:0}
+  #vcsbar .vb{color:var(--teal);font-weight:600}
+  #vcsbar .vc{background:rgba(206,145,120,.15);color:var(--amb);border-radius:8px;padding:0 5px;font-weight:600;font-size:9px}
   #typ{display:none;gap:5px;align-items:center;color:var(--teal);font-size:11px}
   #typ.show{display:flex}
   .d{width:5px;height:5px;background:var(--teal);border-radius:50%;animation:b 1.1s infinite}
@@ -744,6 +783,12 @@ export class SessionPanel implements vscode.Disposable {
   <span>Context</span>
   <div id="ctrk"><div id="cfil"></div></div>
   <span id="cpct">0%</span><span id="tcnt">0+0</span><span id="tcst">$0.0000</span>
+</div>
+<div id="vcsbar">
+  <span>🔀</span><span class="vb" id="vb">—</span>
+  <span id="vchg"></span>
+  <span style="flex:1"></span>
+  <span id="vwd" style="font-family:var(--mn);opacity:.7" title=""></span>
 </div>
 <div id="ibar">
   <div id="dh">📎 Drop files to inject as context</div>
@@ -1175,6 +1220,12 @@ window.addEventListener('message',({data})=>{switch(data.type){
   case 'turn_done':setBusy(false);break;
   case 'error':addE(data.message);setBusy(false);break;
   case 'system':addS(data.message||'');break;
+  case 'vcs_state':{
+    const vb=document.getElementById('vb'),vc=document.getElementById('vchg'),vw=document.getElementById('vwd');
+    if(vb)vb.textContent=data.branch||'\u2014';
+    if(vc){const n=data.changes||0;vc.textContent=n>0?n+' change'+(n!==1?'s':''):'clean';vc.className=n>0?'vc':'';}
+    if(vw&&data.projectDir){const p=data.projectDir.replace(/\\\\/g,'/');const short=p.split('/').slice(-2).join('/');vw.textContent=short;vw.title=p;}
+    break;}
   case 'clear_display':
     C.innerHTML='';
     warned=false;
