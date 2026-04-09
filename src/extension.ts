@@ -712,6 +712,11 @@ export function activate(context: vscode.ExtensionContext): void {
         false,
         targetRepo,
       );
+      // Confirm in the active chat session
+      const activeSession = SessionPanel.current();
+      if (activeSession) {
+        activeSession.sendCommand(`[system] Bug report filed: ${title.trim()}`);
+      }
     }),
   );
 

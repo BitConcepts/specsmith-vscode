@@ -52,6 +52,7 @@ export class SessionPanel implements vscode.Disposable {
   private readonly _globalState: vscode.Memento;
   private _chatFile: string | undefined;
   private _chatStream: fs.WriteStream | undefined;
+  private _availableProviders: string[] = ['ollama'];
 
   // ── Factory (async — awaits SecretStorage for API keys) ───────────────────
 
@@ -132,6 +133,38 @@ export class SessionPanel implements vscode.Disposable {
       }
     }
 
+    // ── Provider validation: if selected provider has no API key, offer alternatives ──
+    if (provider !== 'ollama') {
+      const hasKey = !!(await ApiKeyManager.getKey(context.secrets, provider));
+      if (!hasKey) {
+        // Build list of available providers
+        const available: Array<{ label: string; id: string }> = [{ label: '🦙 Ollama (local — no key needed)', id: 'ollama' }];
+        for (const p of ['anthropic', 'openai', 'gemini', 'mistral'] as const) {
+          if (await ApiKeyManager.getKey(context.secrets, p)) {
+            const labels: Record<string, string> = { anthropic: '🧠 Anthropic (Claude)', openai: '🤖 OpenAI (GPT)', gemini: '✨ Google Gemini', mistral: '🌬 Mistral AI' };
+            available.push({ label: labels[p] ?? p, id: p });
+          }
+        }
+        const picked = await vscode.window.showQuickPick(
+          [...available, { label: '🔑 Set API Key…', id: '__setkey__' }],
+          { placeHolder: `No API key for ${provider}. Choose an available provider:` },
+        );
+        if (!picked) { return undefined as unknown as SessionPanel; } // cancelled
+        if (picked.id === '__setkey__') {
+          await ApiKeyManager.promptSetKey(context.secrets);
+          return undefined as unknown as SessionPanel; // they can retry after setting key
+        }
+        provider = picked.id;
+        model = ''; // reset model for new provider
+      }
+    }
+
+    // Build list of providers with keys for the webview dropdown
+    const availableProviders: string[] = ['ollama'];
+    for (const p of ['anthropic', 'openai', 'gemini', 'mistral'] as const) {
+      if (await ApiKeyManager.getKey(context.secrets, p)) { availableProviders.push(p); }
+    }
+
     const config: SessionConfig = { projectDir, provider, model, sessionId: Date.now().toString() };
     const panel = vscode.window.createWebviewPanel(
       'specsmithSession',
@@ -141,6 +174,7 @@ export class SessionPanel implements vscode.Disposable {
     );
 
     const inst = new SessionPanel(panel, config, execPath, envOverrides, context.secrets, context.globalState, ollamaCtx);
+    inst._availableProviders = availableProviders;
     SessionPanel._instances.push(inst);
     SessionPanel._current = inst;
     return inst;
@@ -285,6 +319,7 @@ export class SessionPanel implements vscode.Disposable {
           type: 'init', provider: this._config.provider,
           model: this._config.model, projectDir: this._config.projectDir,
           models: getStaticModels(this._config.provider),
+          availableProviders: this._availableProviders,
         } satisfies SpecsmithEvent);
         // Offer previous chat session replay (last 40 messages as proper bubbles)
         const prev = this._loadPreviousChat();
@@ -1208,7 +1243,8 @@ function inj(file){
 /* Messages from host */
 window.addEventListener('message',({data})=>{switch(data.type){
   case 'init':if(data.provider){document.getElementById('ps').value=data.provider;popMdl(data.provider,data.models||[],data.model)}
-    if(data.projectDir){const l=document.getElementById('dlbl');l.textContent=data.projectDir.split(/[\\\\/]/).pop()||data.projectDir;l.title=data.projectDir}break;
+    if(data.projectDir){const l=document.getElementById('dlbl');l.textContent=data.projectDir.split(/[\\\\/]/).pop()||data.projectDir;l.title=data.projectDir}
+    if(data.availableProviders){const ps=document.getElementById('ps');for(const o of ps.options){if(!data.availableProviders.includes(o.value)){o.disabled=true;o.textContent=o.value+' (no key)'}}}break;
   case 'models':popMdl(document.getElementById('ps').value,data.models,curMdl);break;
   case 'ready':setBusy(false);addS(\`AEE Agent ready — \${data.provider||''}/\${data.model||''} (\${data.tools||0} tools)\`);
     if(data.project_dir){const l=document.getElementById('dlbl');l.textContent=data.project_dir.split(/[\\\\/]/).pop();l.title=data.project_dir}break;

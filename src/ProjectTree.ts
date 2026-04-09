@@ -110,18 +110,28 @@ export class ProjectTreeProvider
   getChildren(element?: ProjectItem): ProjectItem[] {
     // ── Root: list projects ────────────────────────────────────────────────
     if (!element) {
+      // Import SessionPanel lazily to check active project
+      let activeDir: string | undefined;
+      try {
+        const { SessionPanel } = require('./SessionPanel');
+        activeDir = SessionPanel.current()?.projectDir;
+      } catch { /* SessionPanel not available yet */ }
+
       return this._projects
         .filter((p) => fs.existsSync(p))
         .map((p) => {
+          const isActive = activeDir && (p === activeDir || p.toLowerCase() === activeDir.toLowerCase());
           const item = new ProjectItem(
             path.basename(p),
             vscode.TreeItemCollapsibleState.Collapsed,
             'project',
             p,
           );
-          item.iconPath   = new vscode.ThemeIcon('folder');
-          item.description = p;
-          item.tooltip     = p;
+          item.iconPath    = isActive
+            ? new vscode.ThemeIcon('circle-filled', new vscode.ThemeColor('charts.green'))
+            : new vscode.ThemeIcon('folder');
+          item.description = isActive ? `● ${p}` : p;
+          item.tooltip     = isActive ? `● Active session — ${p}` : p;
           return item;
         });
     }

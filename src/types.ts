@@ -51,6 +51,7 @@ export interface SpecsmithEvent {
 
   // init (extension → webview)
   projectDir?: string;
+  availableProviders?: string[];  // providers with API keys configured (+ ollama)
 
   // models (extension → webview)
   models?: ModelInfo[];
