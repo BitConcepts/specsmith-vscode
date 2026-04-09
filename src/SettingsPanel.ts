@@ -138,13 +138,11 @@ async function _handleMsg(msg: Msg): Promise<void> {
     case 'checkVersion': await _checkVersion(_ctx); break;
 
     case 'installUpdate': {
-      // Use the venv update mechanism (same as the Environment tab's Update button)
       const ch = vscode.workspace.getConfiguration('specsmith').get<string>('releaseChannel', 'stable') as 'stable' | 'pre-release';
       const term = _getTerminal("specsmith");
       term.sendText(buildUpdateVenvCommand(ch));
       term.show();
-      _panel?.webview.postMessage({ type: 'showRestartBanner', message: '✓ Updating environment… Restart VS Code when the terminal finishes.' });
-      _panel?.webview.postMessage({ type: 'installStarted' });
+      _panel?.webview.postMessage({ type: 'showRestartBanner', message: '\u2713 Updating specsmith\u2026 Restart VS Code when terminal finishes.', needsRestart: true });
       break;
     }
 
@@ -172,7 +170,7 @@ async function _handleMsg(msg: Msg): Promise<void> {
       term.sendText(cmds.join('; '));
       term.show();
       // Show persistent restart banner in the panel instead of a transient popup
-      _panel?.webview.postMessage({ type: 'showRestartBanner', message: `✓ Creating environment at ${getGlobalVenvDir()}. Restart VS Code when the terminal finishes.` });
+      _panel?.webview.postMessage({ type: 'showRestartBanner', message: '\u2713 Creating environment\u2026 Restart VS Code when terminal finishes.', needsRestart: true });
       break;
     }
 
@@ -181,7 +179,7 @@ async function _handleMsg(msg: Msg): Promise<void> {
       const term2 = _getTerminal("specsmith");
       term2.sendText(buildUpdateVenvCommand(ch2));
       term2.show();
-      _panel?.webview.postMessage({ type: 'showRestartBanner', message: '✓ Updating environment… Restart VS Code when the terminal finishes.' });
+      _panel?.webview.postMessage({ type: 'showRestartBanner', message: '\u2713 Updating specsmith\u2026 Restart VS Code when terminal finishes.', needsRestart: true });
       break;
     }
 
@@ -194,7 +192,7 @@ async function _handleMsg(msg: Msg): Promise<void> {
       const delTerm = _getTerminal("specsmith");
       delTerm.sendText(buildDeleteVenvCommands().join('; '));
       delTerm.show();
-      _panel?.webview.postMessage({ type: 'showRestartBanner', message: '⚠ Environment deleted. Restart VS Code to reflect the change.' });
+      _panel?.webview.postMessage({ type: 'showRestartBanner', message: '\u26a0 Environment deleted. Restart VS Code to apply.', needsRestart: true });
       break;
     }
 
@@ -214,7 +212,7 @@ async function _handleMsg(msg: Msg): Promise<void> {
       const rbTerm = _getTerminal("specsmith");
       rbTerm.sendText([...buildDeleteVenvCommands(), ...buildCreateVenvCommands(chRb, providersRb)].join('; '));
       rbTerm.show();
-      _panel?.webview.postMessage({ type: 'showRestartBanner', message: '✓ Rebuilding environment… Restart VS Code when the terminal finishes.' });
+      _panel?.webview.postMessage({ type: 'showRestartBanner', message: '\u2713 Rebuilding environment\u2026 Restart VS Code when terminal finishes.', needsRestart: true });
       break;
     }
 
@@ -242,7 +240,7 @@ async function _handleMsg(msg: Msg): Promise<void> {
       const rmTerm = _getTerminal("specsmith");
       rmTerm.sendText(cleanCmd);
       rmTerm.show();
-      _panel?.webview.postMessage({ type: 'showRestartBanner', message: '✓ System installs removed. Restart VS Code to apply.' });
+      _panel?.webview.postMessage({ type: 'showRestartBanner', message: '\u2713 System installs removed. No restart needed.', needsRestart: false });
       break;
     }
 
@@ -324,6 +322,7 @@ async function _handleMsg(msg: Msg): Promise<void> {
       const term3 = _getTerminal("specsmith");
       term3.sendText(`ollama rm "${msg.modelId}"`);
       term3.show();
+      _panel?.webview.postMessage({ type: 'showRestartBanner', message: `\u2713 Removing ${msg.modelId}\u2026 No restart needed.`, needsRestart: false });
       break;
     }
 
@@ -332,6 +331,7 @@ async function _handleMsg(msg: Msg): Promise<void> {
       const term4 = _getTerminal("specsmith");
       term4.sendText(`ollama pull "${msg.modelId}"`);
       term4.show();
+      _panel?.webview.postMessage({ type: 'showRestartBanner', message: `\u2713 Updating ${msg.modelId}\u2026 No restart needed.`, needsRestart: false });
       break;
     }
 
@@ -602,7 +602,7 @@ function _html(data: SettingsData): string {
 <div id="restart-banner">
   <span id="restart-msg">✓ Operation complete. Restart VS Code to apply changes.</span>
   <div style="display:flex;gap:6px">
-    <button onclick="vscode.postMessage({command:'reloadWindow'})">↺ Restart VS Code</button>
+    <button id="restart-btn" onclick="vscode.postMessage({command:'reloadWindow'})">\u21BA Restart VS Code</button>
     <button class="dismiss" onclick="document.getElementById('restart-banner').classList.remove('show')">Dismiss</button>
   </div>
 </div>
@@ -857,12 +857,14 @@ window.addEventListener('message',({data})=>{
     }
   }
   if(data.type==='showRestartBanner'){
-    // Show persistent restart banner — stays visible until user restarts or dismisses
-    const banner=document.getElementById('restart-banner');
-    const msg=document.getElementById('restart-msg');
-    if(banner&&msg){
-      msg.textContent=data.message||'\u2713 Operation complete. Restart VS Code to apply changes.';
+    var banner=document.getElementById('restart-banner');
+    var bmsg=document.getElementById('restart-msg');
+    var rbtn=document.getElementById('restart-btn');
+    if(banner&&bmsg){
+      bmsg.textContent=data.message||'\u2713 Operation complete.';
+      if(rbtn)rbtn.style.display=data.needsRestart?'':'none';
       banner.classList.add('show');
+      if(!data.needsRestart)setTimeout(function(){banner.classList.remove('show');},5000);
     }
   }
 });
