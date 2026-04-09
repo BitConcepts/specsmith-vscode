@@ -687,7 +687,7 @@ function _html(data: SettingsData): string {
 <h3>Installed Models</h3>
 <div id="ollama-mdl-load" class="dim" style="margin:4px 0">Checking models\u2026</div>
 <table id="ollama-mdl-table" style="display:none;font-size:11px">
-  <thead><tr><td><b>Model</b></td><td class="dim">Size</td><td class="dim">Last pulled</td><td></td></tr></thead>
+  <thead><tr><td><b>Model</b></td><td class="dim">Size</td><td class="dim">Digest</td><td class="dim">Last pulled</td><td></td></tr></thead>
   <tbody id="ollama-mdl-body"></tbody>
 </table>
 <div class="btn-row">
@@ -810,7 +810,9 @@ window.addEventListener('message',({data})=>{
       const stale=modMs>0&&(now-modMs)>STALE_MS;
       const dateStyle=stale?'color:var(--amb);font-weight:600':'color:var(--dim)';
       const staleTag=stale?' \u26a0':'';  // ⚠ indicator
+      var dg=(m.digest||'').slice(0,12);
       return \`<tr><td>\${m.name}</td><td class="dim">\${gb}</td>
+        <td class="dim" style="font-family:var(--mn);font-size:9px">\${dg}</td>
         <td style="\${dateStyle}">\${mod}\${staleTag}</td>
         <td style="display:flex;gap:3px">
           <button class="tb" onclick="vscode.postMessage({command:'ollamaUpdateModel',modelId:'\${m.name}'})">\u2b06 Update</button>
