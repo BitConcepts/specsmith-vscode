@@ -1,121 +1,431 @@
 {
   "name": "specsmith-vscode",
-  "displayName": "specsmith — AEE Workbench",
+  "displayName": "specsmith \u00e2\u20ac\u201d AEE Workbench",
   "description": "Applied Epistemic Engineering workbench. 6-tab Settings panel, AI agent sessions, execution profiles, FPGA/HDL tool support, Ollama local LLMs, and tool installer.",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "publisher": "BitConcepts",
   "license": "MIT",
-  "engines": { "vscode": "^1.85.0" },
-  "categories": ["AI", "Other"],
-  "keywords": ["ai", "agent", "epistemic", "requirements", "governance", "specsmith", "fpga", "hdl", "ollama", "execution-profiles"],
-  "repository": { "type": "git", "url": "https://github.com/BitConcepts/specsmith-vscode" },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "AI",
+    "Other"
+  ],
+  "keywords": [
+    "ai",
+    "agent",
+    "epistemic",
+    "requirements",
+    "governance",
+    "specsmith",
+    "fpga",
+    "hdl",
+    "ollama",
+    "execution-profiles"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/BitConcepts/specsmith-vscode"
+  },
   "privacyPolicy": "https://github.com/BitConcepts/specsmith-vscode/blob/main/PRIVACY.md",
-  "activationEvents": ["onStartupFinished"],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "main": "./out/extension.js",
   "contributes": {
     "viewsContainers": {
-      "activitybar": [{ "id": "specsmith", "title": "specsmith AEE", "icon": "media/specsmith.svg" }]
+      "activitybar": [
+        {
+          "id": "specsmith",
+          "title": "specsmith AEE",
+          "icon": "media/specsmith.svg"
+        }
+      ]
     },
     "views": {
       "specsmith": [
-        { "id": "specsmith.projects", "name": "Projects",  "type": "tree" },
-        { "id": "specsmith.sessions", "name": "Sessions",  "type": "tree" }
+        {
+          "id": "specsmith.projects",
+          "name": "Projects",
+          "type": "tree"
+        },
+        {
+          "id": "specsmith.sessions",
+          "name": "Sessions",
+          "type": "tree"
+        }
       ]
     },
     "commands": [
-      { "command": "specsmith.newSession",            "title": "New Agent Session",          "category": "specsmith", "icon": "$(add)" },
-      { "command": "specsmith.newSessionFromProject", "title": "Open Agent Session",          "category": "specsmith", "icon": "$(comment-discussion)" },
-      { "command": "specsmith.deleteSession",         "title": "Remove Session",              "category": "specsmith", "icon": "$(trash)" },
-      { "command": "specsmith.openProject",           "title": "Add Project Folder",          "category": "specsmith", "icon": "$(folder-opened)" },
-      { "command": "specsmith.createProject",         "title": "Create New Project",          "category": "specsmith", "icon": "$(add)" },
-      { "command": "specsmith.importProject",         "title": "Import Existing Project",     "category": "specsmith", "icon": "$(cloud-download)" },
-      { "command": "specsmith.removeProject",         "title": "Remove from Sidebar",         "category": "specsmith", "icon": "$(remove)" },
-      { "command": "specsmith.refreshProjects",       "title": "Refresh",                     "category": "specsmith", "icon": "$(refresh)" },
-      { "command": "specsmith.newFile",               "title": "New File",                    "category": "specsmith", "icon": "$(new-file)" },
-      { "command": "specsmith.newFolder",             "title": "New Folder",                  "category": "specsmith", "icon": "$(new-folder)" },
-      { "command": "specsmith.deleteFile",            "title": "Delete",                      "category": "specsmith", "icon": "$(trash)" },
-      { "command": "specsmith.renameFile",            "title": "Rename",                      "category": "specsmith" },
-      { "command": "specsmith.copyFilePath",          "title": "Copy Path",                   "category": "specsmith" },
-      { "command": "specsmith.revealInExplorer",      "title": "Reveal in Explorer",          "category": "specsmith" },
-      { "command": "specsmith.setApiKey",             "title": "Set API Key",                 "category": "specsmith", "icon": "$(key)" },
-      { "command": "specsmith.clearApiKey",           "title": "Clear API Key",               "category": "specsmith" },
-      { "command": "specsmith.apiKeyStatus",          "title": "API Key Status",              "category": "specsmith" },
-      { "command": "specsmith.runAudit",              "title": "Run Audit",                   "category": "specsmith" },
-      { "command": "specsmith.runValidate",           "title": "Run Validate",                "category": "specsmith" },
-      { "command": "specsmith.runDoctor",             "title": "Run Doctor",                  "category": "specsmith" },
-      { "command": "specsmith.addRequirement",        "title": "Quick Add Requirement",       "category": "specsmith", "icon": "$(add)" },
-      { "command": "specsmith.navigateRequirements",  "title": "Navigate Requirements",       "category": "specsmith", "icon": "$(list-unordered)" },
-      { "command": "specsmith.openScaffold",          "title": "Open Scaffolding File",       "category": "specsmith", "icon": "$(settings-gear)" },
-      { "command": "specsmith.showSettings",         "title": "Settings",                    "category": "specsmith", "icon": "$(gear)" },
-      { "command": "specsmith.showHelp",              "title": "Show Help",                   "category": "specsmith", "icon": "$(question)" },
-      { "command": "specsmith.showGovernance",        "title": "Open Project Settings",        "category": "specsmith", "icon": "$(settings-gear)" },
-      { "command": "specsmith.installOrUpgrade",      "title": "Install or Upgrade specsmith", "category": "specsmith", "icon": "$(cloud-download)" },
-      { "command": "specsmith.clearHistory",          "title": "Clear Chat History (current session)",   "category": "specsmith", "icon": "$(clear-all)" },
-      { "command": "specsmith.clearAllHistory",       "title": "Clear Chat History (all sessions)",      "category": "specsmith", "icon": "$(clear-all)" },
-      { "command": "specsmith.downloadModel",         "title": "Download Ollama Model",                  "category": "specsmith", "icon": "$(cloud-download)" },
-      { "command": "specsmith.selectModelForTask",    "title": "Select Model for Task (GPU-aware)",      "category": "specsmith", "icon": "$(symbol-misc)" },
-      { "command": "specsmith.reportBug",    "title": "Report a Bug",              "category": "specsmith", "icon": "$(bug)" },
-      { "command": "specsmith.reportIssue",  "title": "Report Issue / Suggest Feature", "category": "specsmith", "icon": "$(comment-discussion)" }
+      {
+        "command": "specsmith.newSession",
+        "title": "New Agent Session",
+        "category": "specsmith",
+        "icon": "$(add)"
+      },
+      {
+        "command": "specsmith.newSessionFromProject",
+        "title": "Open Agent Session",
+        "category": "specsmith",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "specsmith.deleteSession",
+        "title": "Remove Session",
+        "category": "specsmith",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "specsmith.openProject",
+        "title": "Add Project Folder",
+        "category": "specsmith",
+        "icon": "$(folder-opened)"
+      },
+      {
+        "command": "specsmith.createProject",
+        "title": "Create New Project",
+        "category": "specsmith",
+        "icon": "$(add)"
+      },
+      {
+        "command": "specsmith.importProject",
+        "title": "Import Existing Project",
+        "category": "specsmith",
+        "icon": "$(cloud-download)"
+      },
+      {
+        "command": "specsmith.removeProject",
+        "title": "Remove from Sidebar",
+        "category": "specsmith",
+        "icon": "$(remove)"
+      },
+      {
+        "command": "specsmith.refreshProjects",
+        "title": "Refresh",
+        "category": "specsmith",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "specsmith.newFile",
+        "title": "New File",
+        "category": "specsmith",
+        "icon": "$(new-file)"
+      },
+      {
+        "command": "specsmith.newFolder",
+        "title": "New Folder",
+        "category": "specsmith",
+        "icon": "$(new-folder)"
+      },
+      {
+        "command": "specsmith.deleteFile",
+        "title": "Delete",
+        "category": "specsmith",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "specsmith.renameFile",
+        "title": "Rename",
+        "category": "specsmith"
+      },
+      {
+        "command": "specsmith.copyFilePath",
+        "title": "Copy Path",
+        "category": "specsmith"
+      },
+      {
+        "command": "specsmith.revealInExplorer",
+        "title": "Reveal in Explorer",
+        "category": "specsmith"
+      },
+      {
+        "command": "specsmith.setApiKey",
+        "title": "Set API Key",
+        "category": "specsmith",
+        "icon": "$(key)"
+      },
+      {
+        "command": "specsmith.clearApiKey",
+        "title": "Clear API Key",
+        "category": "specsmith"
+      },
+      {
+        "command": "specsmith.apiKeyStatus",
+        "title": "API Key Status",
+        "category": "specsmith"
+      },
+      {
+        "command": "specsmith.runAudit",
+        "title": "Run Audit",
+        "category": "specsmith"
+      },
+      {
+        "command": "specsmith.runValidate",
+        "title": "Run Validate",
+        "category": "specsmith"
+      },
+      {
+        "command": "specsmith.runDoctor",
+        "title": "Run Doctor",
+        "category": "specsmith"
+      },
+      {
+        "command": "specsmith.addRequirement",
+        "title": "Quick Add Requirement",
+        "category": "specsmith",
+        "icon": "$(add)"
+      },
+      {
+        "command": "specsmith.navigateRequirements",
+        "title": "Navigate Requirements",
+        "category": "specsmith",
+        "icon": "$(list-unordered)"
+      },
+      {
+        "command": "specsmith.openScaffold",
+        "title": "Open Scaffolding File",
+        "category": "specsmith",
+        "icon": "$(settings-gear)"
+      },
+      {
+        "command": "specsmith.showSettings",
+        "title": "Settings",
+        "category": "specsmith",
+        "icon": "$(gear)"
+      },
+      {
+        "command": "specsmith.showHelp",
+        "title": "Show Help",
+        "category": "specsmith",
+        "icon": "$(question)"
+      },
+      {
+        "command": "specsmith.showGovernance",
+        "title": "Open Project Settings",
+        "category": "specsmith",
+        "icon": "$(settings-gear)"
+      },
+      {
+        "command": "specsmith.installOrUpgrade",
+        "title": "Install or Upgrade specsmith",
+        "category": "specsmith",
+        "icon": "$(cloud-download)"
+      },
+      {
+        "command": "specsmith.clearHistory",
+        "title": "Clear Chat History (current session)",
+        "category": "specsmith",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "specsmith.clearAllHistory",
+        "title": "Clear Chat History (all sessions)",
+        "category": "specsmith",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "specsmith.downloadModel",
+        "title": "Download Ollama Model",
+        "category": "specsmith",
+        "icon": "$(cloud-download)"
+      },
+      {
+        "command": "specsmith.selectModelForTask",
+        "title": "Select Model for Task (GPU-aware)",
+        "category": "specsmith",
+        "icon": "$(symbol-misc)"
+      },
+      {
+        "command": "specsmith.reportBug",
+        "title": "Report a Bug",
+        "category": "specsmith",
+        "icon": "$(bug)"
+      },
+      {
+        "command": "specsmith.reportIssue",
+        "title": "Report Issue / Suggest Feature",
+        "category": "specsmith",
+        "icon": "$(comment-discussion)"
+      }
     ],
     "menus": {
       "view/title": [
-        { "command": "specsmith.newSession",      "when": "view == specsmith.sessions",  "group": "navigation" },
-        { "command": "specsmith.showSettings",    "when": "view == specsmith.sessions",  "group": "navigation" },
-        { "command": "specsmith.showHelp",        "when": "view == specsmith.sessions",  "group": "navigation" },
-        { "command": "specsmith.showGovernance",  "when": "view == specsmith.sessions",  "group": "navigation" },
-        { "command": "specsmith.showSettings",    "when": "view == specsmith.projects",  "group": "navigation" },
-        { "command": "specsmith.showGovernance",  "when": "view == specsmith.projects",  "group": "navigation" },
-        { "command": "specsmith.openProject",     "when": "view == specsmith.projects",  "group": "navigation" },
-        { "command": "specsmith.createProject",   "when": "view == specsmith.projects",  "group": "navigation" },
-        { "command": "specsmith.importProject",   "when": "view == specsmith.projects",  "group": "navigation" },
-        { "command": "specsmith.refreshProjects", "when": "view == specsmith.projects",  "group": "navigation" }
+        {
+          "command": "specsmith.newSession",
+          "when": "view == specsmith.sessions",
+          "group": "navigation"
+        },
+        {
+          "command": "specsmith.showSettings",
+          "when": "view == specsmith.sessions",
+          "group": "navigation"
+        },
+        {
+          "command": "specsmith.showHelp",
+          "when": "view == specsmith.sessions",
+          "group": "navigation"
+        },
+        {
+          "command": "specsmith.showGovernance",
+          "when": "view == specsmith.sessions",
+          "group": "navigation"
+        },
+        {
+          "command": "specsmith.showSettings",
+          "when": "view == specsmith.projects",
+          "group": "navigation"
+        },
+        {
+          "command": "specsmith.showGovernance",
+          "when": "view == specsmith.projects",
+          "group": "navigation"
+        },
+        {
+          "command": "specsmith.openProject",
+          "when": "view == specsmith.projects",
+          "group": "navigation"
+        },
+        {
+          "command": "specsmith.createProject",
+          "when": "view == specsmith.projects",
+          "group": "navigation"
+        },
+        {
+          "command": "specsmith.importProject",
+          "when": "view == specsmith.projects",
+          "group": "navigation"
+        },
+        {
+          "command": "specsmith.refreshProjects",
+          "when": "view == specsmith.projects",
+          "group": "navigation"
+        }
       ],
       "view/item/context": [
-        { "command": "specsmith.showGovernance",         "when": "view == specsmith.projects && viewItem == project",    "group": "inline" },
-        { "command": "specsmith.newSessionFromProject", "when": "view == specsmith.projects && viewItem == project",    "group": "inline" },
-        { "command": "specsmith.removeProject",         "when": "view == specsmith.projects && viewItem == project",    "group": "1_project" },
-        { "command": "specsmith.deleteSession",         "when": "view == specsmith.sessions && viewItem == session",    "group": "inline" },
-        { "command": "specsmith.newFile",               "when": "view == specsmith.projects && (viewItem == dir || viewItem == project)", "group": "inline" },
-        { "command": "specsmith.newFolder",             "when": "view == specsmith.projects && (viewItem == dir || viewItem == project)", "group": "inline" },
-        { "command": "specsmith.deleteFile",            "when": "view == specsmith.projects && (viewItem == file || viewItem == dir)",   "group": "7_modification" },
-        { "command": "specsmith.renameFile",            "when": "view == specsmith.projects && (viewItem == file || viewItem == dir)",   "group": "7_modification" },
-        { "command": "specsmith.copyFilePath",          "when": "view == specsmith.projects && (viewItem == file || viewItem == dir || viewItem == govdoc)", "group": "6_copy" },
-        { "command": "specsmith.revealInExplorer",      "when": "view == specsmith.projects && (viewItem == file || viewItem == dir)",   "group": "6_copy" }
+        {
+          "command": "specsmith.showGovernance",
+          "when": "view == specsmith.projects && viewItem == project",
+          "group": "inline"
+        },
+        {
+          "command": "specsmith.newSessionFromProject",
+          "when": "view == specsmith.projects && viewItem == project",
+          "group": "inline"
+        },
+        {
+          "command": "specsmith.removeProject",
+          "when": "view == specsmith.projects && viewItem == project",
+          "group": "1_project"
+        },
+        {
+          "command": "specsmith.deleteSession",
+          "when": "view == specsmith.sessions && viewItem == session",
+          "group": "inline"
+        },
+        {
+          "command": "specsmith.newFile",
+          "when": "view == specsmith.projects && (viewItem == dir || viewItem == project)",
+          "group": "inline"
+        },
+        {
+          "command": "specsmith.newFolder",
+          "when": "view == specsmith.projects && (viewItem == dir || viewItem == project)",
+          "group": "inline"
+        },
+        {
+          "command": "specsmith.deleteFile",
+          "when": "view == specsmith.projects && (viewItem == file || viewItem == dir)",
+          "group": "7_modification"
+        },
+        {
+          "command": "specsmith.renameFile",
+          "when": "view == specsmith.projects && (viewItem == file || viewItem == dir)",
+          "group": "7_modification"
+        },
+        {
+          "command": "specsmith.copyFilePath",
+          "when": "view == specsmith.projects && (viewItem == file || viewItem == dir || viewItem == govdoc)",
+          "group": "6_copy"
+        },
+        {
+          "command": "specsmith.revealInExplorer",
+          "when": "view == specsmith.projects && (viewItem == file || viewItem == dir)",
+          "group": "6_copy"
+        }
       ]
     },
     "keybindings": [
-      { "command": "specsmith.newSession",           "key": "ctrl+shift+;",  "mac": "cmd+shift+;" },
-      { "command": "specsmith.showSettings",        "key": "ctrl+shift+,",  "mac": "cmd+shift+," },
-      { "command": "specsmith.showGovernance",       "key": "ctrl+shift+g",  "mac": "cmd+shift+g" },
-      { "command": "specsmith.addRequirement",       "key": "ctrl+shift+r",  "mac": "cmd+shift+r" },
-      { "command": "specsmith.navigateRequirements", "key": "ctrl+shift+q",  "mac": "cmd+shift+q" },
-      { "command": "specsmith.showHelp",             "key": "ctrl+shift+h",  "mac": "cmd+shift+h", "when": "activeWebviewPanelId == 'specsmithSession'" }
+      {
+        "command": "specsmith.newSession",
+        "key": "ctrl+shift+;",
+        "mac": "cmd+shift+;"
+      },
+      {
+        "command": "specsmith.showSettings",
+        "key": "ctrl+shift+,",
+        "mac": "cmd+shift+,"
+      },
+      {
+        "command": "specsmith.showGovernance",
+        "key": "ctrl+shift+g",
+        "mac": "cmd+shift+g"
+      },
+      {
+        "command": "specsmith.addRequirement",
+        "key": "ctrl+shift+r",
+        "mac": "cmd+shift+r"
+      },
+      {
+        "command": "specsmith.navigateRequirements",
+        "key": "ctrl+shift+q",
+        "mac": "cmd+shift+q"
+      },
+      {
+        "command": "specsmith.showHelp",
+        "key": "ctrl+shift+h",
+        "mac": "cmd+shift+h",
+        "when": "activeWebviewPanelId == 'specsmithSession'"
+      }
     ],
     "configuration": {
       "title": "specsmith",
       "properties": {
         "specsmith.executablePath": {
-          "type": "string", "default": "specsmith",
+          "type": "string",
+          "default": "specsmith",
           "description": "Path to the specsmith CLI. Defaults to 'specsmith' (must be on PATH). If specsmith isn't found, set the full path here."
         },
         "specsmith.defaultProvider": {
-          "type": "string", "default": "ollama",
-          "enum": ["ollama","anthropic","openai","gemini","mistral"],
-          "enumDescriptions": [
-            "Ollama local models — no API key needed (default)",
-            "Anthropic Claude — set key via 'specsmith: Set API Key'",
-            "OpenAI GPT/O-series — set key via 'specsmith: Set API Key'",
-            "Google Gemini — set key via 'specsmith: Set API Key'",
-            "Mistral AI + Pixtral OCR — set key via 'specsmith: Set API Key'"
+          "type": "string",
+          "default": "ollama",
+          "enum": [
+            "ollama",
+            "anthropic",
+            "openai",
+            "gemini",
+            "mistral"
           ],
-          "description": "Default LLM provider. Ollama (local) is the default — no API key needed. Auto-overridden if exactly one cloud API key is configured."
+          "enumDescriptions": [
+            "Ollama local models \u00e2\u20ac\u201d no API key needed (default)",
+            "Anthropic Claude \u00e2\u20ac\u201d set key via 'specsmith: Set API Key'",
+            "OpenAI GPT/O-series \u00e2\u20ac\u201d set key via 'specsmith: Set API Key'",
+            "Google Gemini \u00e2\u20ac\u201d set key via 'specsmith: Set API Key'",
+            "Mistral AI + Pixtral OCR \u00e2\u20ac\u201d set key via 'specsmith: Set API Key'"
+          ],
+          "description": "Default LLM provider. Ollama (local) is the default \u00e2\u20ac\u201d no API key needed. Auto-overridden if exactly one cloud API key is configured."
         },
         "specsmith.defaultModel": {
-          "type": "string", "default": "",
+          "type": "string",
+          "default": "",
           "description": "Default model (blank = provider default). Per-project settings override this."
         },
         "specsmith.watchedProjects": {
-          "type": "array", "items": { "type": "string" }, "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
           "description": "Project directories to persist in the sidebar."
         },
         "specsmith.autoOpenGovernancePanel": {
@@ -126,15 +436,23 @@
         "specsmith.ollamaContextLength": {
           "type": "number",
           "default": 0,
-          "enum": [0, 4096, 8192, 16384, 32768, 65536, 131072],
+          "enum": [
+            0,
+            4096,
+            8192,
+            16384,
+            32768,
+            65536,
+            131072
+          ],
           "enumDescriptions": [
             "Auto-detect based on GPU VRAM (recommended)",
-            "4K tokens — safe for all hardware",
-            "8K tokens — 4-8GB VRAM",
-            "16K tokens — 8-16GB VRAM",
-            "32K tokens — 16-24GB VRAM",
-            "64K tokens — 24GB+ VRAM",
-            "128K tokens — 24GB+ VRAM (supported models only)"
+            "4K tokens \u00e2\u20ac\u201d safe for all hardware",
+            "8K tokens \u00e2\u20ac\u201d 4-8GB VRAM",
+            "16K tokens \u00e2\u20ac\u201d 8-16GB VRAM",
+            "32K tokens \u00e2\u20ac\u201d 16-24GB VRAM",
+            "64K tokens \u00e2\u20ac\u201d 24GB+ VRAM",
+            "128K tokens \u00e2\u20ac\u201d 24GB+ VRAM (supported models only)"
           ],
           "description": "Ollama context window size (num_ctx). 0 = auto-detect from GPU VRAM. Session-specific: changing this takes effect when you open a new session."
         },
@@ -146,7 +464,10 @@
         "specsmith.releaseChannel": {
           "type": "string",
           "default": "stable",
-          "enum": ["stable", "pre-release"],
+          "enum": [
+            "stable",
+            "pre-release"
+          ],
           "enumDescriptions": [
             "Latest stable release from PyPI (recommended). Uses pipx upgrade or pip install --upgrade.",
             "Latest pre-release / dev build (0.x.y.devN). Cutting-edge features; may have rough edges. Uses pip install --pre."
