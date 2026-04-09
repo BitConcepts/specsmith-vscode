@@ -25,6 +25,17 @@ import {
 let _panel: vscode.WebviewPanel | undefined;
 let _ctx: vscode.ExtensionContext | undefined;
 
+/** Reuse a single terminal for all specsmith operations to avoid terminal sprawl. */
+function _getTerminal(name: string): vscode.Terminal {
+  const existing = vscode.window.terminals.find(t => t.name === 'specsmith');
+  if (existing) {
+    existing.show();
+    return existing;
+  }
+  const term = _getTerminal("specsmith");
+  return term;
+}
+
 const _ENV: NodeJS.ProcessEnv = augmentedEnv(process.env);
 
 export function closeSettingsPanel(): void { _panel?.dispose(); }
@@ -127,7 +138,7 @@ async function _handleMsg(msg: Msg): Promise<void> {
     case 'installUpdate': {
       // Use the venv update mechanism (same as the Environment tab's Update button)
       const ch = vscode.workspace.getConfiguration('specsmith').get<string>('releaseChannel', 'stable') as 'stable' | 'pre-release';
-      const term = vscode.window.createTerminal({ name: 'specsmith: update env', shellPath: _shellPath() });
+      const term = _getTerminal("specsmith");
       term.sendText(buildUpdateVenvCommand(ch));
       term.show();
       _panel?.webview.postMessage({ type: 'showRestartBanner', message: '✓ Updating environment… Restart VS Code when the terminal finishes.' });
@@ -155,7 +166,7 @@ async function _handleMsg(msg: Msg): Promise<void> {
         if (await ApiKeyManager.getKey(_ctx.secrets, p)) { providers.push(pkg); }
       }
       const cmds = buildCreateVenvCommands(ch, providers);
-      const term = vscode.window.createTerminal({ name: 'specsmith: create env', shellPath: _shellPath() });
+      const term = _getTerminal("specsmith");
       term.sendText(cmds.join('; '));
       term.show();
       // Show persistent restart banner in the panel instead of a transient popup
@@ -165,7 +176,7 @@ async function _handleMsg(msg: Msg): Promise<void> {
 
     case 'updateVenv': {
       const ch2 = vscode.workspace.getConfiguration('specsmith').get<string>('releaseChannel', 'stable') as 'stable' | 'pre-release';
-      const term2 = vscode.window.createTerminal({ name: 'specsmith: update env', shellPath: _shellPath() });
+      const term2 = _getTerminal("specsmith");
       term2.sendText(buildUpdateVenvCommand(ch2));
       term2.show();
       _panel?.webview.postMessage({ type: 'showRestartBanner', message: '✓ Updating environment… Restart VS Code when the terminal finishes.' });
@@ -178,7 +189,7 @@ async function _handleMsg(msg: Msg): Promise<void> {
         { modal: true }, 'Delete',
       );
       if (confirm !== 'Delete') { break; }
-      const delTerm = vscode.window.createTerminal({ name: 'specsmith: delete env', shellPath: _shellPath() });
+      const delTerm = _getTerminal("specsmith");
       delTerm.sendText(buildDeleteVenvCommands().join('; '));
       delTerm.show();
       _panel?.webview.postMessage({ type: 'showRestartBanner', message: '⚠ Environment deleted. Restart VS Code to reflect the change.' });
@@ -198,7 +209,7 @@ async function _handleMsg(msg: Msg): Promise<void> {
       for (const [p, pkg] of Object.entries(provPkgRb)) {
         if (await AKM.getKey(_ctx.secrets, p)) { providersRb.push(pkg); }
       }
-      const rbTerm = vscode.window.createTerminal({ name: 'specsmith: rebuild env', shellPath: _shellPath() });
+      const rbTerm = _getTerminal("specsmith");
       rbTerm.sendText([...buildDeleteVenvCommands(), ...buildCreateVenvCommands(chRb, providersRb)].join('; '));
       rbTerm.show();
       _panel?.webview.postMessage({ type: 'showRestartBanner', message: '✓ Rebuilding environment… Restart VS Code when the terminal finishes.' });
@@ -226,7 +237,7 @@ async function _handleMsg(msg: Msg): Promise<void> {
             'python3 -m pip uninstall -y specsmith 2>/dev/null',
             `echo 'Done. Only the venv at ${getGlobalVenvDir()} is preserved.'`,
           ].join('; ');
-      const rmTerm = vscode.window.createTerminal({ name: 'specsmith: remove system installs', shellPath: _shellPath() });
+      const rmTerm = _getTerminal("specsmith");
       rmTerm.sendText(cleanCmd);
       rmTerm.show();
       _panel?.webview.postMessage({ type: 'showRestartBanner', message: '✓ System installs removed. Restart VS Code to apply.' });
@@ -288,7 +299,7 @@ async function _handleMsg(msg: Msg): Promise<void> {
 
     case 'ollamaRemoveModel': {
       if (!msg.modelId) { break; }
-      const term3 = vscode.window.createTerminal({ name: 'ollama remove' });
+      const term3 = _getTerminal("specsmith");
       term3.sendText(`ollama rm "${msg.modelId}"`);
       term3.show();
       break;
@@ -296,7 +307,7 @@ async function _handleMsg(msg: Msg): Promise<void> {
 
     case 'ollamaUpdateModel': {
       if (!msg.modelId) { break; }
-      const term4 = vscode.window.createTerminal({ name: 'ollama update' });
+      const term4 = _getTerminal("specsmith");
       term4.sendText(`ollama pull "${msg.modelId}"`);
       term4.show();
       break;
@@ -306,7 +317,7 @@ async function _handleMsg(msg: Msg): Promise<void> {
       const { OllamaManager } = await import('./OllamaManager');
       const ids = await OllamaManager.getInstalledIds();
       if (!ids.length) { void vscode.window.showInformationMessage('No Ollama models installed.'); break; }
-      const term5 = vscode.window.createTerminal({ name: 'ollama update-all' });
+      const term5 = _getTerminal("specsmith");
       term5.sendText(ids.map((m) => `ollama pull "${m}"`).join('; '));
       term5.show();
       break;
@@ -328,7 +339,7 @@ async function _handleMsg(msg: Msg): Promise<void> {
       } else {
         upgradeCmd = 'curl -fsSL https://ollama.ai/install.sh | sh';
       }
-      const term6 = vscode.window.createTerminal({ name: 'ollama upgrade', shellPath: _shellPath() });
+      const term6 = _getTerminal("specsmith");
       term6.sendText(upgradeCmd);
       term6.show();
       break;

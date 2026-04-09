@@ -489,6 +489,28 @@ export class SessionPanel implements vscode.Disposable {
       case 'installOrUpgrade':
         void vscode.commands.executeCommand('specsmith.installOrUpgrade');
         break;
+
+      case 'changeProject': {
+        void vscode.window.showOpenDialog({
+          canSelectFolders: true, canSelectFiles: false, canSelectMany: false,
+          openLabel: 'Switch to this project',
+          defaultUri: vscode.Uri.file(this._config.projectDir),
+        }).then((uris) => {
+          if (!uris?.[0]) { return; }
+          const newDir = uris[0].fsPath;
+          this._config.projectDir = newDir;
+          this._saveSettings();
+          // Restart the bridge with the new directory
+          void ApiKeyManager.getAllEnv(this._secrets).then((env) => {
+            this._bridge.restart(this._config, env);
+          });
+          this._panel.title = `\uD83E\uDDE0 ${path.basename(newDir)}`;
+          void this._panel.webview.postMessage({
+            type: 'system', message: `\uD83D\uDCC2 Switched to: ${newDir}`,
+          } satisfies SpecsmithEvent);
+        });
+        break;
+      }
     }
   }
 
@@ -801,6 +823,7 @@ export class SessionPanel implements vscode.Disposable {
 <div id="pbar">
   <span style="opacity:.7;cursor:pointer" onclick="openProj()">📁</span>
   <span class="dlbl" id="dlbl" title="" onclick="openProj()">.</span>
+  <button class="hbtn" title="Change project directory" onclick="vscode.postMessage({command:'changeProject'})">\uD83D\uDCC2</button>
   <span class="bsep">│</span>
   <label for="ps" style="color:var(--dim)">Provider</label>
   <select id="ps">
@@ -1270,7 +1293,7 @@ window.addEventListener('message',({data})=>{switch(data.type){
   case 'init':if(data.provider){document.getElementById('ps').value=data.provider;popMdl(data.provider,data.models||[],data.model)}
     if(data.projectDir){const l=document.getElementById('dlbl');l.textContent=data.projectDir.split(/[\\\\/]/).pop()||data.projectDir;l.title=data.projectDir}
     if(data.availableProviders){const ps=document.getElementById('ps');for(const o of ps.options){if(!data.availableProviders.includes(o.value)){o.disabled=true;o.textContent=o.value+' (no key)'}}}break;
-  case 'models':popMdl(document.getElementById('ps').value,data.models,curMdl);break;
+  case 'models':if(data.models&&data.models.length>0)popMdl(document.getElementById('ps').value,data.models,curMdl);break;
   case 'ready':setBusy(false);addS(\`AEE Agent ready — \${data.provider||''}/\${data.model||''} (\${data.tools||0} tools)\`);
     if(data.project_dir){const l=document.getElementById('dlbl');l.textContent=data.project_dir.split(/[\\\\/]/).pop();l.title=data.project_dir}break;
   case 'llm_chunk':{

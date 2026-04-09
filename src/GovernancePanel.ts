@@ -25,6 +25,16 @@ let _openFn: (() => Promise<void>) | undefined;
 // detection when VS Code extension host PATH doesn't include pipx/pip bins.
 const _ENV: NodeJS.ProcessEnv = augmentedEnv(process.env);
 
+/** Reuse a single terminal for all specsmith operations. */
+function _getSpecsmithTerminal(): vscode.Terminal {
+  const existing = vscode.window.terminals.find(t => t.name === 'specsmith');
+  if (existing) { existing.show(); return existing; }
+  const shellPath = process.platform === 'win32' ? 'powershell.exe' : process.env.SHELL;
+  const term = _getSpecsmithTerminal();
+  term.show();
+  return term;
+}
+
 /** Dispose the Settings panel — called when all sessions for a project close. */
 export function closeGovernancePanel(): void {
   _panel?.dispose();
@@ -363,7 +373,7 @@ async function _handleMsg(msg: GovMsg): Promise<void> {
 
     case 'runCommand': {
       const exec = _specsmithExec();
-      const term = vscode.window.createTerminal({ name: 'specsmith', cwd: _projectDir });
+      const term = _getSpecsmithTerminal();
       term.sendText(`${_execCall(exec)} ${msg.cmd} --project-dir "${_projectDir}"`);
       term.show();
       break;
@@ -439,7 +449,7 @@ async function _handleMsg(msg: GovMsg): Promise<void> {
 
     case 'phaseNext': {
       const exec = _specsmithExec();
-      const term = vscode.window.createTerminal({ name: 'specsmith phase', cwd: _projectDir });
+      const term = _getSpecsmithTerminal();
       term.sendText(`${_execCall(exec)} phase next --project-dir "${_projectDir}"`);
       term.show();
       await new Promise<void>((r) => setTimeout(r, 1500));
@@ -733,7 +743,7 @@ async function _addGovFile(context: vscode.ExtensionContext, projectDir: string,
           _sendFn('Generate an architecture document for this project. Write to docs/ARCHITECTURE.md.');
         }
       } else if (ans.label.startsWith('⚙')) {
-        const term = vscode.window.createTerminal({ name: 'specsmith architect', cwd: projectDir });
+        const term = _getSpecsmithTerminal();
         term.sendText(`${exec} architect --non-interactive --project-dir "${projectDir}"`); term.show();
       } else {
         fs.writeFileSync(path.join(docsDir, 'ARCHITECTURE.md'), '# Architecture\n\n## Overview\n\n## Components\n\n## Data Flow\n\n## Deployment\n\n');
@@ -749,7 +759,7 @@ async function _addGovFile(context: vscode.ExtensionContext, projectDir: string,
       break;
     }
     case 'agents': {
-      const term = vscode.window.createTerminal({ name: 'specsmith import', cwd: projectDir });
+      const term = _getSpecsmithTerminal();
       term.sendText(`${exec} import --project-dir "${projectDir}"`); term.show();
       break;
     }
