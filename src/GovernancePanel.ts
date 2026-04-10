@@ -30,7 +30,7 @@ function _getSpecsmithTerminal(): vscode.Terminal {
   const existing = vscode.window.terminals.find(t => t.name === 'specsmith');
   if (existing) { existing.show(); return existing; }
   const shellPath = process.platform === 'win32' ? 'powershell.exe' : process.env.SHELL;
-  const term = _getSpecsmithTerminal();
+  const term = vscode.window.createTerminal({ name: 'specsmith', shellPath });
   term.show();
   return term;
 }
@@ -112,10 +112,12 @@ interface GovMsg {
   command:
     | 'saveScaffold' | 'runCommand' | 'sendToAgent' | 'openFile' | 'refresh'
     | 'addFile' | 'detectLanguages' | 'phaseNext' | 'phaseSet' | 'scanProject'
-    | 'saveExecution' | 'scanTools' | 'toolInstall' | 'detectTools' | 'detectDisciplines';
+    | 'saveExecution' | 'scanTools' | 'toolInstall' | 'detectTools' | 'detectDisciplines'
+    | 'reportIssue';
   scaffold?: ScaffoldData; cmd?: string; prompt?: string; file?: string; addType?: string;
   phaseKey?: string;
   profileName?: string; customAllowed?: string; customBlocked?: string; customBlockedTools?: string;
+  autoApprove?: boolean;
   toolKey?: string;
 }
 
@@ -374,7 +376,10 @@ async function _handleMsg(msg: GovMsg): Promise<void> {
     case 'runCommand': {
       const exec = _specsmithExec();
       const term = _getSpecsmithTerminal();
-      term.sendText(`${_execCall(exec)} ${msg.cmd} --project-dir "${_projectDir}"`);
+      // Some subcommands (tools install, export) don't accept --project-dir
+      const NO_PROJECT_DIR = /^(tools install|export)\b/;
+      const projFlag = NO_PROJECT_DIR.test(msg.cmd ?? '') ? '' : ` --project-dir "${_projectDir}"`;
+      term.sendText(`${_execCall(exec)} ${msg.cmd}${projFlag}`);
       term.show();
       break;
     }
@@ -416,7 +421,7 @@ async function _handleMsg(msg: GovMsg): Promise<void> {
 
     case 'saveExecution': {
       if (!msg.profileName) { break; }
-      _saveExecutionSettings(_projectDir, msg.profileName, msg.customAllowed ?? '', msg.customBlocked ?? '', msg.customBlockedTools ?? '');
+      _saveExecutionSettings(_projectDir, msg.profileName, msg.customAllowed ?? '', msg.customBlocked ?? '', msg.customBlockedTools ?? '', msg.autoApprove ?? false);
       break;
     }
 
@@ -442,10 +447,14 @@ async function _handleMsg(msg: GovMsg): Promise<void> {
       if (!msg.toolKey) { break; }
       const exec5 = _specsmithExec();
       const term5 = vscode.window.createTerminal({ name: `install ${msg.toolKey}`, cwd: _projectDir });
-      term5.sendText(`${_execCall(exec5)} tools install "${msg.toolKey}"`);
+      term5.sendText(`${_execCall(exec5)} tools install "${msg.toolKey}" -y`);
       term5.show();
       break;
     }
+
+    case 'reportIssue':
+      void vscode.commands.executeCommand('specsmith.reportIssue');
+      break;
 
     case 'phaseNext': {
       const exec = _specsmithExec();
@@ -585,11 +594,13 @@ function _saveExecutionSettings(
   customAllowed: string,
   customBlocked: string,
   customBlockedTools: string,
+  autoApprove = false,
 ): void {
   const p = path.join(projectDir, 'scaffold.yml');
   if (!fs.existsSync(p)) { void vscode.window.showWarningMessage('scaffold.yml not found'); return; }
   let lines = fs.readFileSync(p, 'utf8').split('\n');
   if (profileName) { lines = _replaceYamlSection(lines, 'execution_profile', profileName); }
+  lines = _replaceYamlSection(lines, 'auto_approve', autoApprove ? 'true' : 'false');
   const toList = (s: string) => s.split(/[,\n]/).map(x => x.trim()).filter(Boolean);
   const allowed = toList(customAllowed);
   const blocked = toList(customBlocked);
@@ -1091,6 +1102,14 @@ Profile is stored in <b>scaffold.yml</b> as <code>execution_profile</code>.</div
   <select id="exec-profile" onchange="execProfileChanged()">${profileOpts}</select>
 </div>
 <div id="exec-profile-desc" class="info-box" style="font-size:11px;margin-top:4px">${EXEC_PROFILES.find(p=>p.value===execProfile)?.desc??''}</div>
+<h3>Agent Behaviour</h3>
+<div class="fg" style="margin-bottom:8px">
+  <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+    <input type="checkbox" id="exec-auto-approve"${(s as Record<string,unknown>).auto_approve ? ' checked' : ''}>
+    <span>Auto-approve agent actions</span>
+  </label>
+  <div class="dim" style="font-size:10px;margin-top:2px">When enabled, the agent proceeds without asking permission. Saved to scaffold.yml.</div>
+</div>
 <h3>Custom Overrides</h3>
 <div class="fg"><label class="fl">Additional allowed command prefixes (one per line or comma-separated)</label>
   <textarea id="exec-allowed" rows="3" style="width:100%;background:var(--ib);color:var(--if);border:1px solid var(--br);border-radius:4px;padding:4px 7px;font-size:11px;font-family:var(--fn);resize:vertical">${joinOrEmpty(s.custom_allowed_commands)}</textarea>
@@ -1133,7 +1152,7 @@ Profile is stored in <b>scaffold.yml</b> as <code>execution_profile</code>.</div
   <button class="qa-btn" onclick="runCmd('req gaps')">⚠ req gaps</button>
   <button class="qa-btn" onclick="runCmd('tools scan --fpga')">🔧 tools scan</button>
   <button class="qa-btn" onclick="runCmd('phase show')">\uD83D\uDCCA Lifecycle Status</button>
-  <button class="qa-btn" onclick="sendToAgent('I want to report a bug or issue. Look at recent session errors. Help me write a clear bug report and file it to GitHub Issues.')">\uD83D\uDC1B Report Bug</button>
+  <button class="qa-btn" onclick="vscode.postMessage({command:'reportIssue'})">\uD83D\uDC1B Report Bug</button>
 </div>
 <h3>\uD83E\uDD16 AI-Guided (${_guidedLabel})</h3>
 ${_guidedBtn}
@@ -1168,6 +1187,7 @@ function saveExec(){
     customAllowed:document.getElementById('exec-allowed').value,
     customBlocked:document.getElementById('exec-blocked').value,
     customBlockedTools:document.getElementById('exec-blocked-tools').value,
+    autoApprove:document.getElementById('exec-auto-approve').checked,
   });
 }
 function scanToolsNow(){

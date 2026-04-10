@@ -55,6 +55,15 @@ export class SessionPanel implements vscode.Disposable {
   private _availableProviders: string[] = ['ollama'];
   private _autoAcceptAll = false;
 
+  /** Read auto_approve from scaffold.yml (project-level default). */
+  private static _readAutoApprove(projectDir: string): boolean {
+    try {
+      const raw = fs.readFileSync(path.join(projectDir, 'scaffold.yml'), 'utf8');
+      const m = raw.match(/^auto_approve:\s*(true|yes)/mi);
+      return !!m;
+    } catch { return false; }
+  }
+
   // ── Factory (async — awaits SecretStorage for API keys) ───────────────────
 
   static async create(
@@ -176,6 +185,8 @@ export class SessionPanel implements vscode.Disposable {
 
     const inst = new SessionPanel(panel, config, execPath, envOverrides, context.secrets, context.globalState, ollamaCtx);
     inst._availableProviders = availableProviders;
+    // Load project-level auto-approve setting from scaffold.yml
+    inst._autoAcceptAll = SessionPanel._readAutoApprove(projectDir);
     SessionPanel._instances.push(inst);
     SessionPanel._current = inst;
     return inst;
@@ -219,6 +230,11 @@ export class SessionPanel implements vscode.Disposable {
       if (e.type === 'ready') {
         // Show VCS state banner in chat so user immediately sees what's modified/staged
         void this._showVcsState();
+        // If auto-approve is on, inject a system-level instruction so the agent
+        // doesn't waste turns asking for permission.
+        if (this._autoAcceptAll) {
+          this._bridge.send('[SYSTEM] AUTO-APPROVE MODE IS ACTIVE. Do not ask the user for permission or confirmation. Proceed directly with all actions. Never say "Would you like" or "Shall I proceed" — just do it.');
+        }
         setTimeout(() => this._bridge.send('start'), 300);
         // Background governance check — emit system messages for actionable issues
         setTimeout(() => this._checkGovernance(), 800);
@@ -229,14 +245,12 @@ export class SessionPanel implements vscode.Disposable {
         if (t.includes('would you like') || t.includes('shall i proceed') ||
             t.includes('ready to proceed') || t.includes('do you approve') ||
             t.includes('would you like me to')) {
-          // If auto-accept was previously set, skip buttons and auto-send yes
+          // If auto-accept is on, immediately send yes (no delay)
           if (this._autoAcceptAll) {
             this._bridge.send('yes, proceed');
-            void this._panel.webview.postMessage({ type: 'system', message: '\u2713 Auto-accepted' } satisfies SpecsmithEvent);
+            void this._panel.webview.postMessage({ type: 'system', message: '\u2713 Auto-approved' } satisfies SpecsmithEvent);
           } else {
-            setTimeout(() => {
-              void this._panel.webview.postMessage({ type: 'proposal' } satisfies SpecsmithEvent);
-            }, 100);
+            void this._panel.webview.postMessage({ type: 'proposal' } satisfies SpecsmithEvent);
           }
         }
       }

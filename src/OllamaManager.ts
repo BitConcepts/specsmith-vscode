@@ -144,29 +144,35 @@ export class OllamaManager {
     ]);
 
     const results: ModelInfo[] = [];
-    const addedIds = new Set<string>();
+    const matchedCatalogIds = new Set<string>();
 
     // ── Installed models (shown first) ────────────────────────────────────
     for (const id of installed) {
-      const catalog = OLLAMA_CATALOG.find((c) => id.includes(c.id.split(':')[0]) || c.id === id);
+      // Exact match first, then match by base tag (e.g. 'qwen2.5' matches 'qwen2.5:7b')
+      const catalog = OLLAMA_CATALOG.find((c) => c.id === id)
+        ?? OLLAMA_CATALOG.find((c) => {
+          const base = c.id.split(':')[0];
+          const installedBase = id.split(':')[0];
+          return base === installedBase;
+        });
+      if (catalog) { matchedCatalogIds.add(catalog.id); }
       results.push({
         id,
-        name:          catalog?.name ?? id,
+        name:          id,  // Always show the real Ollama ID for clarity
         category:      'Installed',
         description:   catalog ? `${catalog.sizeGb}GB • ${catalog.bestFor.slice(0, 2).join(', ')}` : 'local model',
         contextWindow: catalog ? catalog.ctxK * 1024 : 32768,
       });
-      addedIds.add(id);
     }
 
     // ── Catalog models not yet installed ──────────────────────────────────
     const budget = vramGb > 0 ? vramGb * 0.90 : 999;
     for (const entry of OLLAMA_CATALOG) {
-      if (addedIds.has(entry.id)) { continue; }
+      if (matchedCatalogIds.has(entry.id)) { continue; }
       const fits = entry.vramGb <= budget;
       results.push({
         id:            `dl:${entry.id}`,                // 'dl:' prefix = needs download
-        name:          `⬇ ${entry.name}`,
+        name:          `\u2B07 ${entry.name}`,
         category:      fits ? 'Available to Download' : 'Requires More VRAM',
         description:   `${entry.sizeGb}GB • ${entry.bestFor.slice(0, 2).join(', ')} • ${entry.notes}`,
         contextWindow: entry.ctxK * 1024,
@@ -207,6 +213,7 @@ export class OllamaManager {
         });
         OllamaManager._pullProc = proc;
 
+        let lastPct = 0;
         const rl = readline.createInterface({ input: proc.stdout! });
         rl.on('line', (line) => {
           if (combinedToken.isCancellationRequested()) {
@@ -222,16 +229,20 @@ export class OllamaManager {
             };
             const { status = '', completed = 0, total = 0 } = chunk;
             if (status === 'success') {
-              _progress.report({ message: 'complete', increment: 100 });
+              _progress.report({ message: '\u2713 Complete', increment: 100 - lastPct });
               return;
             }
             if (total > 0 && completed > 0) {
               const pct = Math.round((completed / total) * 100);
               const mb = (completed / (1024 ** 2)).toFixed(0);
               const totalMb = (total / (1024 ** 2)).toFixed(0);
-              _progress.report({ message: `${pct}% (${mb}/${totalMb} MB)`, increment: 0 });
+              const delta = Math.max(0, pct - lastPct);
+              if (delta > 0) {
+                _progress.report({ message: `${pct}% (${mb}/${totalMb} MB)`, increment: delta });
+                lastPct = pct;
+              }
             } else if (status) {
-              _progress.report({ message: status, increment: 0 });
+              _progress.report({ message: status });
             }
           } catch { /* non-JSON line, ignore */ }
         });
