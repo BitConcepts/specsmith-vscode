@@ -47,7 +47,7 @@ export function showSettingsPanel(context: vscode.ExtensionContext): void {
 
   _panel = vscode.window.createWebviewPanel(
     'specsmithSettings',
-    '\u2699 specsmith Settings',
+    '\u2699 Global Settings',
     vscode.ViewColumn.Two,
     { enableScripts: true, retainContextWhenHidden: true },
   );
@@ -85,6 +85,7 @@ interface SettingsData {
   venvActive: boolean;
   apiKeys: Array<{ id: string; label: string; hasKey: boolean }>;
   defaultProvider: string;
+  defaultModel: string;
 }
 
 function _loadData(context: vscode.ExtensionContext): SettingsData {
@@ -106,8 +107,9 @@ function _loadData(context: vscode.ExtensionContext): SettingsData {
   const lastCheck = checkMs ? new Date(checkMs).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : null;
   const releaseChannel = vscode.workspace.getConfiguration('specsmith').get<string>('releaseChannel', 'stable');
   const defaultProvider = vscode.workspace.getConfiguration('specsmith').get<string>('defaultProvider', 'ollama');
+  const defaultModel = vscode.workspace.getConfiguration('specsmith').get<string>('defaultModel', '');
   // API key status is loaded async — start with empty, filled by _sendApiKeyStatus()
-  return { installedVersion, availableVersion: avail || null, lastUpdateCheck: lastCheck, releaseChannel, venvVersion, venvActive: venvExists(), apiKeys: [], defaultProvider };
+  return { installedVersion, availableVersion: avail || null, lastUpdateCheck: lastCheck, releaseChannel, venvVersion, venvActive: venvExists(), apiKeys: [], defaultProvider, defaultModel };
 }
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -121,7 +123,7 @@ interface Msg {
     | 'ollamaRemoveModel' | 'ollamaUpdateModel' | 'ollamaUpdateAll'
     | 'checkOllamaVersion' | 'ollamaUpgrade'
     | 'setApiKey' | 'verifyApiKey' | 'getApiKeyStatus' | 'setDefaultProvider'
-    | 'getGpuInfo' | 'setOllamaCtx';
+    | 'getGpuInfo' | 'setOllamaCtx' | 'setDefaultOllamaModel';
   channel?: string;
   modelId?: string;
   provider?: string;
@@ -260,6 +262,12 @@ async function _handleMsg(msg: Msg): Promise<void> {
         const cur = vscode.workspace.getConfiguration('specsmith').get<number>('ollamaContextLength', 0);
         _panel?.webview.postMessage({ type: 'gpuInfo', vram: vram.toFixed(1), rec, currentCtx: cur });
       })();
+      break;
+    }
+
+    case 'setDefaultOllamaModel': {
+      const mdl = msg.value ?? '';
+      void vscode.workspace.getConfiguration('specsmith').update('defaultModel', mdl, vscode.ConfigurationTarget.Global);
       break;
     }
 
@@ -541,7 +549,7 @@ function _html(data: SettingsData): string {
 <html lang="en"><head>
 <meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';">
-<title>specsmith Settings</title>
+<title>Global Settings</title>
 <style>
   :root{--bg:var(--vscode-editor-background);--fg:var(--vscode-editor-foreground);
     --sf:var(--vscode-panel-background,#1e1e2e);--br:var(--vscode-panel-border,#313244);
@@ -596,7 +604,7 @@ function _html(data: SettingsData): string {
 </style></head>
 <body>
 <div class="topbar">
-  <span class="title">\u2699 specsmith Settings</span>
+  <span class="title">\u2699 Global Settings</span>
   <button class="btn-sm" onclick="refresh()">&#x21BA; Refresh</button>
 </div>
 <!-- Persistent restart banner — shown after env operations instead of a dismissible popup -->
@@ -693,6 +701,14 @@ function _html(data: SettingsData): string {
 <div class="btn-row">
   <button class="btn-sm" onclick="loadModels()">&#x21BA; Refresh Models</button>
   <button class="btn-sm" onclick="vscode.postMessage({command:'ollamaUpdateAll'})">\u2b06 Update All</button>
+</div>
+<h3>Default Model</h3>
+<div class="info-box" style="font-size:10px">Select which Ollama model to use by default for new sessions. Auto-selects the only model if just one is installed.</div>
+<div class="ver-grid">
+  <span class="ver-lbl">Model</span>
+  <select id="ollama-def-model" data-saved="${data.defaultModel}" onchange="vscode.postMessage({command:'setDefaultOllamaModel',value:this.value})">
+    <option value="">(auto — first installed)</option>
+  </select>
 </div>
 <h3>Context Window</h3>
 <div class="info-box" style="font-size:10px">Controls how much text the model can process per turn. Auto uses GPU VRAM to select the best size. Larger windows use more VRAM.</div>
@@ -822,6 +838,17 @@ window.addEventListener('message',({data})=>{
     load.style.display=data.models&&data.models.length?'none':'';
     tbl.style.display=data.models&&data.models.length?'':'none';
     if(!data.models||!data.models.length){load.textContent='No Ollama models installed';}
+    /* Populate default model dropdown */
+    var defMdlSel=document.getElementById('ollama-def-model');
+    if(defMdlSel&&data.models){
+      var savedDef=defMdlSel.dataset.saved||'';
+      defMdlSel.innerHTML='<option value="">(auto \u2014 first installed)</option>';
+      for(var mi of data.models){
+        var oi=document.createElement('option');oi.value=mi.name;oi.textContent=mi.name;
+        if(mi.name===savedDef)oi.selected=true;
+        defMdlSel.appendChild(oi);
+      }
+    }
   }
   if(data.type==='gpuInfo'){
     var ge=document.getElementById('ollama-gpu');
