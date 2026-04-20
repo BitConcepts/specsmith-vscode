@@ -525,6 +525,13 @@ export class SessionPanel implements vscode.Disposable {
         void vscode.commands.executeCommand('specsmith.showSettings');
         break;
 
+      case 'viewFull':
+        if (msg.text) {
+          void vscode.workspace.openTextDocument({ content: msg.text, language: 'markdown' })
+            .then((doc) => vscode.window.showTextDocument(doc, { preview: true }));
+        }
+        break;
+
       case 'installOrUpgrade':
         void vscode.commands.executeCommand('specsmith.installOrUpgrade');
         break;
@@ -596,12 +603,15 @@ export class SessionPanel implements vscode.Disposable {
       }
 
       if (issues.length > 0) {
-        emit(`⚠ Governance check found ${issues.length} issue(s):\n${issues.map(i => `  • ${i}`).join('\n')}`);
-        // Ask the agent to help fix the issues
+        emit(`\u26a0 Governance check found ${issues.length} issue(s):\n${issues.map(i => `  \u2022 ${i}`).join('\n')}`);
+        // Auto-fix: run specsmith audit --fix first, then ask agent about remaining issues
         setTimeout(() => {
           this._bridge.send(
-            `[LANG:EN] The governance check found these issues:\n${issues.join('\n')}\n\n` +
-            'Walk me through fixing each one. For each issue, explain what\'s wrong and what command to run.',
+            '[RESPOND IN ENGLISH ONLY] ' +
+            'Run specsmith audit --fix to auto-repair governance issues. ' +
+            'Then check if these remain:\n' + issues.join('\n') + '\n' +
+            'Fix each one automatically without asking for permission. ' +
+            'Report what you fixed in 2-3 sentences.',
           );
         }, 1500);
       }
@@ -1000,7 +1010,7 @@ function addT(n,r,e){
     d.innerHTML=\`<div class="thdr">\u274c \${esc(lbl)}</div>
       <details><summary class="tres" style="cursor:pointer;list-style:none">
         \${esc(summary)}<span style="font-size:9px;margin-left:4px;opacity:.6">(click for details)</span>
-      </summary><pre class="err-detail" style="margin-top:4px;font-size:10px">\${esc(r.slice(0,3000))}\${r.length>3000?'\\n\u2026(truncated)':''}</pre>\${rptBtn}</details>\`;
+      </summary><pre class="err-detail" style="margin-top:4px;font-size:10px">\${esc(r.slice(0,3000))}\${r.length>3000?'\\n\u2026(truncated)':''}</pre>\${rptBtn}\${r.length>3000?'<button class="ab" style="margin-top:4px;font-size:10px;color:var(--dim)" onclick="vscode.postMessage({command:\'viewFull\',text:\''+esc(r.replace(/'/g,"\\\\'").slice(0,50000))+'\'})">' + '\uD83D\uDCC4 View Full</button>':''}</details>\`;
   }else if(e){
     d.innerHTML=\`<div class="thdr">❌ \${esc(lbl)}</div><div class="tres">\${esc((r||'').slice(0,200))}</div>\`;
   }else{
@@ -1074,6 +1084,7 @@ const ERR_MAP=[
   [/error code.*401|status.*401/i,         'Authentication failed (401) — check your API key: Ctrl+Shift+P → specsmith: Set API Key'],
   [/Provider error.*401/i,                 'Wrong API key (401) — Ctrl+Shift+P → specsmith: Set API Key'],
   [/ECONNREFUSED|connection refused/i,      'Ollama not running — start it: run ollama serve or open the Ollama app'],
+  [/Provider error.*timed out|timed out/i,   'Ollama timed out — model may be loading. Wait and retry, or try a smaller model.'],
   [/404.*model|model.*not found/i,          'Model not downloaded — Ctrl+Shift+P → specsmith: Download Ollama Model'],
   [/Ollama model not found/i,               'Ollama model not installed — select a model from the dropdown or use: specsmith ollama pull <model>'],
   [/HTTP Error 404/i,                       'Ollama 404 — model not installed. Pick an installed model from the dropdown (Installed group)'],
@@ -1106,8 +1117,8 @@ function addE(m){
   const{short,long}=smartErr(m||'?');
   const d=document.createElement('div');d.className='el';
   const bugBtn=\`<button class="ab" title="Report this bug" style="margin-top:4px;font-size:10px;color:var(--dim)" onclick="rptBug(this)">🐛 Report</button>\`;
-  if(long){
-    d.innerHTML=\`<details><summary>\u26a0 \${esc(short)}</summary><pre class="err-detail">\${esc(long)}</pre></details>\${bugBtn}\`;
+  var vfBtn=long&&long.length>300?\`<button class="ab" title="Open full error in editor" style="margin-top:4px;font-size:10px;color:var(--dim);margin-left:6px" onclick="vscode.postMessage({command:'viewFull',text:this.closest('.el').dataset.errDetail})">\uD83D\uDCC4 View Full</button>\`:'';if(long){
+    d.innerHTML=\`<details><summary>\u26a0 \${esc(short)}</summary><pre class="err-detail">\${esc(long)}</pre></details>\${bugBtn}\${vfBtn}\`;
   }else{
     d.innerHTML=\`<span>\u26a0 \${esc(short)}</span>\${bugBtn}\`;
   }
@@ -1130,7 +1141,8 @@ function updTok(i,o,c){const t=i+o,sz=csize(curMdl),p=Math.min(100,Math.round(t/
   f.style.background=p>=90?'var(--red)':p>=70?'var(--amb)':'var(--grn)';
   document.getElementById('cpct').textContent=p+'%';
   document.getElementById('tcnt').textContent=i.toLocaleString()+'+'+o.toLocaleString();
-  document.getElementById('tcst').textContent='$'+Number(c||0).toFixed(4);
+  var isLocal=document.getElementById('ps').value==='ollama';
+  document.getElementById('tcst').textContent=isLocal?'Free (local)':'$'+Number(c||0).toFixed(4);
   if(p>=70&&!warned){warned=true;document.getElementById('obn').classList.add('show');
     document.getElementById('obt').textContent=\`Context \${p}% — /clear or Audit/Compress\`}}
 function mainAct(){if(busy)stp();else snd()}
