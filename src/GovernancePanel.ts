@@ -113,12 +113,13 @@ interface GovMsg {
     | 'saveScaffold' | 'runCommand' | 'sendToAgent' | 'openFile' | 'refresh'
     | 'addFile' | 'detectLanguages' | 'phaseNext' | 'phaseSet' | 'scanProject'
     | 'saveExecution' | 'scanTools' | 'toolInstall' | 'detectTools' | 'detectDisciplines'
-    | 'reportIssue';
+    | 'reportIssue' | 'agentTask';
   scaffold?: ScaffoldData; cmd?: string; prompt?: string; file?: string; addType?: string;
   phaseKey?: string;
   profileName?: string; customAllowed?: string; customBlocked?: string; customBlockedTools?: string;
   autoApprove?: boolean;
   toolKey?: string;
+  agentSub?: string;
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -455,6 +456,25 @@ async function _handleMsg(msg: GovMsg): Promise<void> {
     case 'reportIssue':
       void vscode.commands.executeCommand('specsmith.reportIssue');
       break;
+
+    case 'agentTask': {
+      const sub = msg.agentSub ?? 'run';
+      const task = await vscode.window.showInputBox({
+        prompt: `Enter task for specsmith agent ${sub}`,
+        placeHolder: 'e.g. add test coverage for agents/config.py',
+        ignoreFocusOut: true,
+      });
+      if (!task) { break; }
+      const exec6 = _specsmithExec();
+      const term6 = _getSpecsmithTerminal();
+      term6.sendText(
+        _execCall(exec6) + ' agent ' + sub
+        + ' "' + task.replace(/"/g, '\\"') + '"'
+        + ' --project-dir "' + _projectDir + '"'
+      );
+      term6.show();
+      break;
+    }
 
     case 'phaseNext': {
       const exec = _specsmithExec();
@@ -1140,6 +1160,16 @@ Profile is stored in <b>scaffold.yml</b> as <code>execution_profile</code>.</div
 
 <!-- Actions tab -->
 <div id="t-actions" class="tab-pane">
+<h3>AG2 Agent Shell</h3>
+<div class="info-box" style="font-size:11px">Local AI agent (Planner/Builder/Verifier) powered by AG2 + Ollama. Requires: <code>pip install ag2[ollama]</code></div>
+<div class="qa">
+  <button class="qa-btn" onclick="runCmd('agent status')">\uD83D\uDCE1 Agent Status</button>
+  <button class="qa-btn" onclick="runCmd('agent reports')">\uD83D\uDCCB Agent Reports</button>
+  <button class="qa-btn" onclick="runCmd('agent verify')">\u2705 Agent Verify</button>
+  <button class="qa-btn" onclick="agentTask('plan')">\uD83D\uDCDD Agent Plan</button>
+  <button class="qa-btn" onclick="agentTask('run')">\u25B6 Agent Run</button>
+  <button class="qa-btn" onclick="agentTask('improve')">\uD83D\uDD27 Agent Improve</button>
+</div>
 <h3>Quick Actions</h3>
 <div class="qa">
   <button class="qa-btn" onclick="runCmd('audit --fix')">🔍 audit --fix</button>
@@ -1227,6 +1257,7 @@ function save(){
   }});
 }
 function scanProj(){vscode.postMessage({command:'scanProject'})}
+function agentTask(sub){vscode.postMessage({command:'agentTask',agentSub:sub})}
 function filt(inp,name){
   const q=inp.value.toLowerCase();
   document.querySelectorAll('input[name='+name+']').forEach(cb=>{
