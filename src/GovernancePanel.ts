@@ -483,9 +483,7 @@ async function _handleMsg(msg: GovMsg): Promise<void> {
         if (msg.agentProvider) { lines.push(`agent_provider: ${msg.agentProvider}`); }
         if (msg.agentModel) { lines.push(`agent_model: ${msg.agentModel}`); }
         if (msg.agentCtx && msg.agentCtx !== '0') { lines.push(`agent_num_ctx: ${msg.agentCtx}`); }
-        if (msg.agentPrimary) { lines.push(`agents_primary_model: ${msg.agentPrimary}`); }
-        if (msg.agentUtility) { lines.push(`agents_utility_model: ${msg.agentUtility}`); }
-        if (msg.agentIter && msg.agentIter !== '10') { lines.push(`agents_max_iterations: ${msg.agentIter}`); }
+        if (msg.agentIter) { lines.push(`agents_max_iterations: ${msg.agentIter}`); }
         if (lines.length > 0) {
           raw = raw.trimEnd() + '\n' + lines.join('\n') + '\n';
         }
@@ -1236,11 +1234,11 @@ ${_alwaysPromptsHtml}
 <!-- Agent tab -->
 <div id="t-agent" class="tab-pane">
 <h3>Project Agent Configuration</h3>
-<div class="info-box" style="font-size:10px">Per-project agent settings. Overrides global defaults from Global Settings. Saved to <code>scaffold.yml</code> under <code>agents:</code>.</div>
+<div class="info-box" style="font-size:10px">Per-project overrides. Empty = use global default. Saved to <code>scaffold.yml</code>.</div>
 <div class="row">
   <div class="fg"><label class="fl">Provider</label>
     <select id="ag-provider">
-      <option value="">(use global default)</option>
+      <option value="">(global default)</option>
       <option value="ollama"${(s as Record<string,any>).agent_provider === 'ollama' ? ' selected' : ''}>Ollama (local)</option>
       <option value="anthropic"${(s as Record<string,any>).agent_provider === 'anthropic' ? ' selected' : ''}>Anthropic</option>
       <option value="openai"${(s as Record<string,any>).agent_provider === 'openai' ? ' selected' : ''}>OpenAI</option>
@@ -1248,31 +1246,31 @@ ${_alwaysPromptsHtml}
     </select>
   </div>
   <div class="fg"><label class="fl">Model</label>
-    <input type="text" id="ag-model" value="${(s as Record<string,any>).agent_model ?? ''}" placeholder="(use global default)">
+    <input type="text" id="ag-model" value="${(s as Record<string,any>).agent_model ?? ''}" placeholder="e.g. qwen2.5:14b">
   </div>
 </div>
-<div class="row">
-  <div class="fg"><label class="fl">AG2 Primary Model</label>
-    <input type="text" id="ag-primary" value="${(s as Record<string,any>).agents_primary_model ?? ''}" placeholder="qwen2.5:14b">
-  </div>
-  <div class="fg"><label class="fl">AG2 Utility Model</label>
-    <input type="text" id="ag-utility" value="${(s as Record<string,any>).agents_utility_model ?? ''}" placeholder="qwen2.5:14b">
-  </div>
-</div>
-<div class="fg"><label class="fl">Context Length (0 = auto from GPU)</label>
+<div class="fg"><label class="fl">Context Length</label>
   <select id="ag-ctx">
-    <option value="0"${!(s as Record<string,any>).agent_num_ctx ? ' selected' : ''}>Auto</option>
-    <option value="4096"${(s as Record<string,any>).agent_num_ctx === '4096' ? ' selected' : ''}>4K</option>
-    <option value="8192"${(s as Record<string,any>).agent_num_ctx === '8192' ? ' selected' : ''}>8K</option>
-    <option value="16384"${(s as Record<string,any>).agent_num_ctx === '16384' ? ' selected' : ''}>16K</option>
-    <option value="32768"${(s as Record<string,any>).agent_num_ctx === '32768' ? ' selected' : ''}>32K</option>
+    <option value="0"${!(s as Record<string,any>).agent_num_ctx ? ' selected' : ''}>Auto (detect from GPU)</option>
+    <option value="4096"${(s as Record<string,any>).agent_num_ctx === '4096' ? ' selected' : ''}>4K tokens</option>
+    <option value="8192"${(s as Record<string,any>).agent_num_ctx === '8192' ? ' selected' : ''}>8K tokens</option>
+    <option value="16384"${(s as Record<string,any>).agent_num_ctx === '16384' ? ' selected' : ''}>16K tokens</option>
+    <option value="32768"${(s as Record<string,any>).agent_num_ctx === '32768' ? ' selected' : ''}>32K tokens</option>
+    <option value="65536"${(s as Record<string,any>).agent_num_ctx === '65536' ? ' selected' : ''}>64K tokens</option>
   </select>
 </div>
-<div class="fg"><label class="fl">Max Iterations per Agent Turn</label>
-  <input type="text" id="ag-iter" value="${(s as Record<string,any>).agents_max_iterations ?? '10'}" style="width:60px">
+<h3>Tool Call Limit</h3>
+<div class="info-box" style="font-size:10px">Max tool calls per agent turn. Prevents infinite loops. Set to 0 for unlimited (stops only at context window).</div>
+<div class="fg">
+  <select id="ag-iter">
+    <option value="10"${(s as Record<string,any>).agents_max_iterations === '10' || !(s as Record<string,any>).agents_max_iterations ? ' selected' : ''}>10 (safe default)</option>
+    <option value="20"${(s as Record<string,any>).agents_max_iterations === '20' ? ' selected' : ''}>20 (recommended)</option>
+    <option value="50"${(s as Record<string,any>).agents_max_iterations === '50' ? ' selected' : ''}>50 (complex tasks)</option>
+    <option value="0"${(s as Record<string,any>).agents_max_iterations === '0' ? ' selected' : ''}>Unlimited (until context full)</option>
+  </select>
 </div>
 <div class="btn-row">
-  <button class="btn" onclick="saveAgent()">\uD83D\uDCBE Save Agent Config</button>
+  <button class="btn" onclick="saveAgent()">\uD83D\uDCBE Save</button>
 </div>
 </div>
 
@@ -1293,8 +1291,6 @@ function saveAgent(){
   vscode.postMessage({command:'saveAgentConfig',
     agentProvider:document.getElementById('ag-provider').value,
     agentModel:document.getElementById('ag-model').value,
-    agentPrimary:document.getElementById('ag-primary').value,
-    agentUtility:document.getElementById('ag-utility').value,
     agentCtx:document.getElementById('ag-ctx').value,
     agentIter:document.getElementById('ag-iter').value,
   });
