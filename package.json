@@ -267,17 +267,7 @@
           "group": "navigation"
         },
         {
-          "command": "specsmith.showGovernance",
-          "when": "view == specsmith.sessions",
-          "group": "navigation"
-        },
-        {
           "command": "specsmith.showSettings",
-          "when": "view == specsmith.projects",
-          "group": "navigation"
-        },
-        {
-          "command": "specsmith.showGovernance",
           "when": "view == specsmith.projects",
           "group": "navigation"
         },

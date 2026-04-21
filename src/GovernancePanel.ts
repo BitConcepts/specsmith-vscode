@@ -52,14 +52,16 @@ export function showGovernancePanel(
   _openFn     = openSession ?? null;
 
   if (_panel) {
+    _panel.title = `\u2699 Project Settings (${path.basename(projectDir)})`;
     _panel.reveal(vscode.ViewColumn.Two);
     _reload();
     return;
   }
 
+  const projName = path.basename(projectDir);
   _panel = vscode.window.createWebviewPanel(
     'specsmithGovernance',
-    '\u2699 Project Settings',
+    `\u2699 Project Settings (${projName})`,
     vscode.ViewColumn.Two,
     { enableScripts: true, retainContextWhenHidden: true },
   );
