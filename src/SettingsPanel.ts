@@ -693,22 +693,12 @@ function _html(data: SettingsData): string {
   <button class="btn-sm" onclick="ollamaUpgrade()">\u2b06 Upgrade Ollama</button>
 </div>
 <h3>Installed Models</h3>
+<div class="info-box" style="font-size:10px">\u2B50 = default model for new sessions. Click \u2B50 on any row to change. Models older than 30 days show \u26a0.</div>
 <div id="ollama-mdl-load" class="dim" style="margin:4px 0">Checking models\u2026</div>
-<table id="ollama-mdl-table" style="display:none;font-size:11px">
-  <thead><tr><td><b>Model</b></td><td class="dim">Size</td><td class="dim">Digest</td><td class="dim">Last pulled</td><td></td></tr></thead>
-  <tbody id="ollama-mdl-body"></tbody>
-</table>
+<div id="ollama-mdl-cards" style="display:none" data-default="${data.defaultModel}"></div>
 <div class="btn-row">
-  <button class="btn-sm" onclick="loadModels()">&#x21BA; Refresh Models</button>
-  <button class="btn-sm" onclick="vscode.postMessage({command:'ollamaUpdateAll'})">\u2b06 Update All</button>
-</div>
-<h3>Default Model</h3>
-<div class="info-box" style="font-size:10px">Select which Ollama model to use by default for new sessions. Auto-selects the only model if just one is installed.</div>
-<div class="ver-grid">
-  <span class="ver-lbl">Model</span>
-  <select id="ollama-def-model" data-saved="${data.defaultModel}" onchange="vscode.postMessage({command:'setDefaultOllamaModel',value:this.value})">
-    <option value="">(auto — first installed)</option>
-  </select>
+  <button class="btn-sm" onclick="loadModels()">&#x21BA; Refresh</button>
+  <button class="btn-sm" id="btn-update-all" style="display:none" onclick="vscode.postMessage({command:'ollamaUpdateAll'})">\u2b06 Update All</button>
 </div>
 <h3>Context Window</h3>
 <div class="info-box" style="font-size:10px">Controls how much text the model can process per turn. Auto uses GPU VRAM to select the best size. Larger windows use more VRAM.</div>
@@ -784,6 +774,12 @@ function chkOllama(){
   vscode.postMessage({command:'checkOllamaVersion'});
 }
 function ollamaUpgrade(){vscode.postMessage({command:'ollamaUpgrade'})}
+function setDef(name){
+  vscode.postMessage({command:'setDefaultOllamaModel',value:name});
+  var cards=document.getElementById('ollama-mdl-cards');
+  if(cards)cards.dataset.default=name;
+  loadModels();
+}
 window.addEventListener('message',({data})=>{
   if(data.type==='versionInfo'){
     const btn=document.getElementById('chk-btn');
@@ -814,41 +810,44 @@ window.addEventListener('message',({data})=>{
     document.getElementById('sys-load').style.display='none';g.style.display='grid';
   }
   if(data.type==='ollamaModels'){
-    const tbody=document.getElementById('ollama-mdl-body');
-    const load=document.getElementById('ollama-mdl-load');
-    const tbl=document.getElementById('ollama-mdl-table');
-    const now=Date.now();
-    const STALE_MS=30*24*60*60*1000; // 30 days
-    tbody.innerHTML=(data.models||[]).map(m=>{
-      const gb=(m.size>0?(m.size/1073741824).toFixed(1)+'GB':'');
-      const mod=(m.modified_at||'').slice(0,10);
-      const modMs=m.modified_at?new Date(m.modified_at).getTime():0;
-      const stale=modMs>0&&(now-modMs)>STALE_MS;
-      const dateStyle=stale?'color:var(--amb);font-weight:600':'color:var(--dim)';
-      const staleTag=stale?' \u26a0':'';  // ⚠ indicator
-      var dg=(m.digest||'').slice(0,12);
-      return \`<tr><td>\${m.name}</td><td class="dim">\${gb}</td>
-        <td class="dim" style="font-family:var(--mn);font-size:9px">\${dg}</td>
-        <td style="\${dateStyle}">\${mod}\${staleTag}</td>
-        <td style="display:flex;gap:3px">
-          <button class="tb" onclick="vscode.postMessage({command:'ollamaUpdateModel',modelId:'\${m.name}'})">\u2b06 Update</button>
-          <button class="tb tb-red" onclick="vscode.postMessage({command:'ollamaRemoveModel',modelId:'\${m.name}'})">\u2717 Remove</button>
-        </td></tr>\`;
-    }).join('');
-    load.style.display=data.models&&data.models.length?'none':'';
-    tbl.style.display=data.models&&data.models.length?'':'none';
-    if(!data.models||!data.models.length){load.textContent='No Ollama models installed';}
-    /* Populate default model dropdown */
-    var defMdlSel=document.getElementById('ollama-def-model');
-    if(defMdlSel&&data.models){
-      var savedDef=defMdlSel.dataset.saved||'';
-      defMdlSel.innerHTML='<option value="">(auto \u2014 first installed)</option>';
-      for(var mi of data.models){
-        var oi=document.createElement('option');oi.value=mi.name;oi.textContent=mi.name;
-        if(mi.name===savedDef)oi.selected=true;
-        defMdlSel.appendChild(oi);
-      }
+    var cards=document.getElementById('ollama-mdl-cards');
+    var load=document.getElementById('ollama-mdl-load');
+    var now=Date.now();
+    var STALE_MS=30*24*60*60*1000;
+    var savedDef=cards?.dataset?.default||'';
+    var hasStale=false;
+    if(cards&&data.models&&data.models.length){
+      cards.innerHTML=(data.models||[]).map(function(m){
+        var gb=m.size>0?(m.size/1073741824).toFixed(1)+'GB':'';
+        var mod=(m.modified_at||'').slice(0,10);
+        var modMs=m.modified_at?new Date(m.modified_at).getTime():0;
+        var stale=modMs>0&&(now-modMs)>STALE_MS;
+        if(stale)hasStale=true;
+        var isDef=m.name===savedDef;
+        var dg=(m.digest||'').slice(0,12);
+        var starStyle=isDef?'color:var(--teal);font-size:14px':'color:var(--dim);font-size:14px;opacity:.4;cursor:pointer';
+        var starTitle=isDef?'Default model':'Click to set as default';
+        return '<div style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-bottom:1px solid var(--br)">' +
+          '<span style="'+starStyle+';cursor:pointer" title="'+starTitle+'" onclick="setDef(\''+m.name+'\')">'+(isDef?'\u2B50':'\u2606')+'</span>' +
+          '<div style="flex:1;min-width:0">' +
+            '<div style="font-weight:600;font-size:12px">'+m.name+'</div>' +
+            '<div style="font-size:10px;color:var(--dim)">'+gb+(dg?' \u00b7 '+dg:'')+(mod?' \u00b7 '+mod:'')+(stale?' \u26a0 stale':'')+'</div>' +
+          '</div>' +
+          '<div style="display:flex;gap:3px;flex-shrink:0">' +
+            (stale?'<button class="tb" style="border-color:var(--amb);color:var(--amb)" onclick="vscode.postMessage({command:\'ollamaUpdateModel\',modelId:\''+m.name+'\'})" title="Update available">\u2b06</button>':'')+
+            '<button class="tb tb-red" onclick="vscode.postMessage({command:\'ollamaRemoveModel\',modelId:\''+m.name+'\'})" title="Remove">\u2717</button>' +
+          '</div>' +
+        '</div>';
+      }).join('');
+      cards.style.display='';
+      load.style.display='none';
+    }else{
+      if(cards)cards.style.display='none';
+      load.textContent='No Ollama models installed';
+      load.style.display='';
     }
+    var uab=document.getElementById('btn-update-all');
+    if(uab)uab.style.display=hasStale?'':'none';
   }
   if(data.type==='gpuInfo'){
     var ge=document.getElementById('ollama-gpu');

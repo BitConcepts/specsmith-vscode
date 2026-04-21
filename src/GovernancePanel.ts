@@ -18,8 +18,8 @@ import { getVenvSpecsmith } from './VenvManager';
 let _panel: vscode.WebviewPanel | undefined;
 let _ctx: vscode.ExtensionContext | undefined;
 let _projectDir: string | undefined;
-let _sendFn: ((t: string) => void) | undefined;
-let _openFn: (() => Promise<void>) | undefined;
+let _sendFn: ((t: string) => void) | null = null;
+let _openFn: (() => Promise<void>) | null = null;
 
 // Augmented process env with Python Scripts dirs prepended — fixes version
 // detection when VS Code extension host PATH doesn't include pipx/pip bins.
@@ -43,13 +43,13 @@ export function closeGovernancePanel(): void {
 export function showGovernancePanel(
   context: vscode.ExtensionContext,
   projectDir: string,
-  sendToSession: (text: string) => void,
-  openSession: () => Promise<void>,
+  sendToSession?: (text: string) => void,
+  openSession?: () => Promise<void>,
 ): void {
   _ctx        = context;
   _projectDir = projectDir;
-  _sendFn     = sendToSession;
-  _openFn     = openSession;
+  _sendFn     = sendToSession ?? null;
+  _openFn     = openSession ?? null;
 
   if (_panel) {
     _panel.reveal(vscode.ViewColumn.Two);
@@ -367,7 +367,7 @@ function _loadProjectData(projectDir: string, context: vscode.ExtensionContext):
 // ── Message handler ────────────────────────────────────────────────────────────
 
 async function _handleMsg(msg: GovMsg): Promise<void> {
-  if (!_ctx || !_projectDir || !_sendFn || !_openFn) { return; }
+  if (!_ctx || !_projectDir) { return; }
 
   switch (msg.command) {
     case 'saveScaffold':
@@ -387,8 +387,16 @@ async function _handleMsg(msg: GovMsg): Promise<void> {
 
     case 'sendToAgent': {
       if (!msg.prompt) { break; }
+      if (!_sendFn) {
+        // No session — run command in terminal instead
+        const exec = _specsmithExec();
+        const term = _getSpecsmithTerminal();
+        term.sendText(`${_execCall(exec)} run --project-dir "${_projectDir}"`);
+        term.show();
+        break;
+      }
       const { SessionPanel } = await import('./SessionPanel');
-      if (!SessionPanel.current()) {
+      if (!SessionPanel.current() && _openFn) {
         await _openFn();
         await new Promise((r) => setTimeout(r, 2000));
       }
@@ -1017,8 +1025,7 @@ function _html(data: ProjectData): string {
 <div class="topbar">
     <span class="title">⚙ Project Settings</span>
   <div style="display:flex;gap:5px">
-    <button class="btn-sm" title="Reload panel" onclick="refresh()">↺ Refresh</button>
-    <button class="btn-sm" title="Start agent session" onclick="sendToAgent('Run the session start protocol: sync, load AGENTS.md, check LEDGER.md.')">🤖 Agent</button>
+    <button class="btn-sm" title="Reload panel" onclick="refresh()">\u21BA Refresh</button>
   </div>
 </div>
 ${(() => {

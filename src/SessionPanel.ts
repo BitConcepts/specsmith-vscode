@@ -714,13 +714,23 @@ export class SessionPanel implements vscode.Disposable {
   private async _refreshModels(provider: string): Promise<void> {
     try {
       const key    = await ApiKeyManager.getKey(this._secrets, provider);
-      const models = await fetchModels(provider, key);
+      const models = await fetchModels(provider, key ?? undefined);
       if (models.length > 0) {
         void this._panel.webview.postMessage({ type: 'models', models } satisfies SpecsmithEvent);
+      } else {
+        // No live models — send static fallback so dropdown isn't empty
+        const fallback = getStaticModels(provider);
+        if (fallback.length > 0) {
+          void this._panel.webview.postMessage({ type: 'models', models: fallback } satisfies SpecsmithEvent);
+        }
       }
-      // If empty, don't send — the static models from init are already showing
-    } catch {
-      // API error — don't clear the model dropdown
+    } catch (err) {
+      // API error — send static fallback so dropdown is never empty
+      const fallback = getStaticModels(provider);
+      if (fallback.length > 0) {
+        void this._panel.webview.postMessage({ type: 'models', models: fallback } satisfies SpecsmithEvent);
+      }
+      console.warn('[specsmith] Model fetch failed for', provider, err);
     }
   }
 
