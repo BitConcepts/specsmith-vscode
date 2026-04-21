@@ -1281,11 +1281,12 @@ ${_alwaysPromptsHtml}
 </div>
 
 </div><!-- scroll -->
-
+<script type="application/json" id="_langs">${JSON.stringify(LANGUAGES)}</script>
+<script type="application/json" id="_fpga">${JSON.stringify(FPGA_TOOLS)}</script>
 <script>
-const vscode=acquireVsCodeApi();
-const LANGUAGES=${JSON.stringify(LANGUAGES)};
-const FPGA_TOOLS=${JSON.stringify(FPGA_TOOLS)};
+var vscode=acquireVsCodeApi();
+var LANGUAGES=JSON.parse(document.getElementById('_langs').textContent||'[]');
+var FPGA_TOOLS=JSON.parse(document.getElementById('_fpga').textContent||'[]');
 
 function sw(id){
   const tabs=['project','tools','files','actions','execution','agent'];
@@ -1378,7 +1379,7 @@ window.addEventListener('message',({data})=>{
       var ok=t.installed;
       var icon=ok?'<span class="ok">\u2713</span>':'<span class="miss">\u2717</span>';
       var ver=t.version?'<span class="dim">'+t.version+'</span>':'<span class="dim">\u2014</span>';
-      var btn=ok?'':'<button class="tb" onclick="installTool(\''+t.name+'\')"' + '>Install</button>';
+      var btn=ok?'':'<button class="tb" onclick="installTool(&#39;'+t.name+'&#39;)">Install</button>';
       return '<tr><td>'+icon+'</td><td>'+t.name+'</td><td class="dim">'+t.category+'</td><td>'+ver+'</td><td>'+btn+'</td></tr>';
     }).join('');
     load.style.display='none';

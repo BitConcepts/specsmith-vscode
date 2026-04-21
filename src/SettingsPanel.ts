@@ -828,14 +828,14 @@ window.addEventListener('message',({data})=>{
         var starStyle=isDef?'color:var(--teal);font-size:14px':'color:var(--dim);font-size:14px;opacity:.4;cursor:pointer';
         var starTitle=isDef?'Default model':'Click to set as default';
         return '<div style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-bottom:1px solid var(--br)">' +
-          '<span style="'+starStyle+';cursor:pointer" title="'+starTitle+'" onclick="setDef(\''+m.name+'\')">'+(isDef?'\u2B50':'\u2606')+'</span>' +
+          '<span style="'+starStyle+';cursor:pointer" title="'+starTitle+'" onclick="setDef(&#39;'+m.name+'&#39;)">'+(isDef?'\u2B50':'\u2606')+'</span>' +
           '<div style="flex:1;min-width:0">' +
             '<div style="font-weight:600;font-size:12px">'+m.name+'</div>' +
             '<div style="font-size:10px;color:var(--dim)">'+gb+(dg?' \u00b7 '+dg:'')+(mod?' \u00b7 '+mod:'')+(stale?' \u26a0 stale':'')+'</div>' +
           '</div>' +
           '<div style="display:flex;gap:3px;flex-shrink:0">' +
-            (stale?'<button class="tb" style="border-color:var(--amb);color:var(--amb)" onclick="vscode.postMessage({command:\'ollamaUpdateModel\',modelId:\''+m.name+'\'})" title="Update available">\u2b06</button>':'')+
-            '<button class="tb tb-red" onclick="vscode.postMessage({command:\'ollamaRemoveModel\',modelId:\''+m.name+'\'})" title="Remove">\u2717</button>' +
+            (stale?'<button class="tb" style="border-color:var(--amb);color:var(--amb)" onclick="vscode.postMessage({command:&#39;ollamaUpdateModel&#39;,modelId:&#39;'+m.name+'&#39;})" title="Update available">\u2b06</button>':'')+
+            '<button class="tb tb-red" onclick="vscode.postMessage({command:&#39;ollamaRemoveModel&#39;,modelId:&#39;'+m.name+'&#39;})" title="Remove">\u2717</button>' +
           '</div>' +
         '</div>';
       }).join('');
@@ -868,8 +868,8 @@ window.addEventListener('message',({data})=>{
       tbody.innerHTML=data.keys.map(function(k){
         var icon=k.hasKey?'<span style="color:var(--grn);font-weight:700">\u2713</span>':'<span style="color:var(--dim)">\u2014</span>';
         var lbl2=k.hasKey?'set':'not set';
-        var setBtn='<button class="tb" onclick="setKey(\''+k.id+'\')">'+( k.hasKey?'\u270E Edit':'\uD83D\uDD11 Set')+'</button>';
-        var verBtn=k.hasKey?'<button class="tb" id="vk-'+k.id+'" onclick="verKey(this,\''+k.id+'\')">\u2705 Verify</button>':'';
+        var setBtn='<button class="tb" onclick="setKey(&#39;'+k.id+'&#39;)">'+( k.hasKey?'\u270E Edit':'\uD83D\uDD11 Set')+'</button>';
+        var verBtn=k.hasKey?'<button class="tb" id="vk-'+k.id+'" onclick="verKey(this,&#39;'+k.id+'&#39;)">\u2705 Verify</button>':'';
         return '<tr><td>'+k.label+'</td><td>'+icon+' '+lbl2+'</td>'+
           '<td style="display:flex;gap:3px">'+setBtn+verBtn+'</td></tr>';
       }).join('');
