@@ -806,7 +806,7 @@ window.addEventListener('message',({data})=>{
   if(data.type==='sysInfo'){
     const g=document.getElementById('sys-grid');
     const labels={os:'OS',cpu:'CPU',cores:'Cores',ram:'RAM',gpu:'GPU',disk:'Disk'};
-    g.innerHTML=Object.entries(labels).filter(([k])=>data.info[k]).map(([k,l])=>\`<span class="sys-lbl">\${l}</span><span class="sys-val">\${data.info[k]}</span>\`).join('');
+    g.innerHTML=Object.entries(labels).filter(([k])=>data.info[k]).map(([k,l])=>'<span class="sys-lbl">'+l+'</span><span class="sys-val">'+data.info[k]+'</span>').join('');
     document.getElementById('sys-load').style.display='none';g.style.display='grid';
   }
   if(data.type==='ollamaModels'){
@@ -865,14 +865,13 @@ window.addEventListener('message',({data})=>{
   if(data.type==='apiKeyStatus'){
     const tbody=document.getElementById('api-key-body');
     if(tbody&&data.keys){
-      tbody.innerHTML=data.keys.map(k=>{
-        const icon=k.hasKey?'<span style="color:var(--grn);font-weight:700">\u2713</span>':'<span style="color:var(--dim)">\u2014</span>';
-        const label=k.hasKey?'set':'not set';
-        return \`<tr><td>\${k.label}</td><td>\${icon} \${label}</td>
-          <td style="display:flex;gap:3px">
-            <button class="tb" onclick="setKey('\${k.id}')">\${k.hasKey?'\u270E Edit':'\uD83D\uDD11 Set'}</button>
-            \${k.hasKey?\`<button class="tb" id="vk-\${k.id}" onclick="verKey(this,'\${k.id}')">\u2705 Verify</button>\`:''}
-          </td></tr>\`;
+      tbody.innerHTML=data.keys.map(function(k){
+        var icon=k.hasKey?'<span style="color:var(--grn);font-weight:700">\u2713</span>':'<span style="color:var(--dim)">\u2014</span>';
+        var lbl2=k.hasKey?'set':'not set';
+        var setBtn='<button class="tb" onclick="setKey(\''+k.id+'\')">'+( k.hasKey?'\u270E Edit':'\uD83D\uDD11 Set')+'</button>';
+        var verBtn=k.hasKey?'<button class="tb" id="vk-'+k.id+'" onclick="verKey(this,\''+k.id+'\')">\u2705 Verify</button>':'';
+        return '<tr><td>'+k.label+'</td><td>'+icon+' '+lbl2+'</td>'+
+          '<td style="display:flex;gap:3px">'+setBtn+verBtn+'</td></tr>';
       }).join('');
     }
   }
