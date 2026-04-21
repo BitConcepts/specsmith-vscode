@@ -682,7 +682,7 @@ function _html(data: SettingsData): string {
 <div class="btn-row">
   <button class="btn" id="chk-btn" onclick="chkVer()">&#x1f50d; Check for Updates</button>
   ${upd ? '<button class="btn btn-upd" onclick="installUpd()">\u2b06 Install Update</button>' : ''}
-  ${data.venvActive && !upd ? '<button class="btn-sm" onclick="updateVenv()">\u2b06 Update to Latest</button>' : ''}
+  ${upd && data.venvActive ? '<button class="btn-sm" onclick="updateVenv()">\u2b06 Update to Latest</button>' : ''}
 </div>
 <h3>\uD83D\uDD11 API Keys</h3>
 <div class="info-box" style="font-size:10px">Keys are stored in your OS credential store (Windows Credential Manager / macOS Keychain). Never written to settings.json.</div>
@@ -713,10 +713,10 @@ function _html(data: SettingsData): string {
 </div>
 <div class="btn-row">
   <button class="btn" id="ollama-chk-btn" onclick="chkOllama()">&#x1f50d; Check Ollama</button>
-  <button class="btn-sm" onclick="ollamaUpgrade()">\u2b06 Upgrade Ollama</button>
+  <button class="btn-sm" id="ollama-upg-btn" style="display:none" onclick="ollamaUpgrade()">\u2b06 Upgrade Ollama</button>
 </div>
 <h3>Models</h3>
-<div class="info-box" style="font-size:10px">\u2B50 = default. Click star to change. GPU: <span id="gpu-inline">detecting\u2026</span></div>
+<div class="info-box" style="font-size:10px">\u2714 DEFAULT = active model. Click to change. GPU: <span id="gpu-inline">detecting\u2026</span></div>
 <div style="display:flex;gap:4px;margin-bottom:6px">
   <button class="btn-sm" id="flt-all" onclick="fltMdl('all')" style="border-color:var(--teal);color:var(--teal)">All</button>
   <button class="btn-sm" id="flt-installed" onclick="fltMdl('installed')">Installed</button>
@@ -867,7 +867,15 @@ window.addEventListener('message',({data})=>{
     var hasStale=false;
     var gpuInline=document.getElementById('gpu-inline');
     if(gpuInline)gpuInline.textContent=data.vramGb>0?data.vramGb.toFixed(1)+' GB VRAM':'CPU only (no GPU)';
-    var catalog=data.catalog||[];
+    var catalog=(data.catalog||[]).slice();
+    /* Sort: default first, then installed by name, then fits-GPU by name, then needs-VRAM by name */
+    catalog.sort(function(a,b){
+      if(a.id===savedDef) return -1;
+      if(b.id===savedDef) return 1;
+      if(a.installed!==b.installed) return a.installed?-1:1;
+      if(a.fits!==b.fits) return a.fits?-1:1;
+      return a.name.localeCompare(b.name);
+    });
     if(cards&&catalog.length){
       cards.innerHTML=catalog.map(function(c){
         var inst=c.installed;
@@ -875,24 +883,24 @@ window.addEventListener('message',({data})=>{
         var fits=c.fits;
         var isDef=c.id===savedDef;
         var show=curFilter==='all'||(curFilter==='installed'&&inst)||(curFilter==='available'&&!inst)||(curFilter==='recommended'&&rec);
-        var starStyle=isDef?'color:var(--teal);font-size:14px':'color:var(--dim);font-size:14px;opacity:.4;cursor:pointer';
+        var defStyle=isDef?'background:var(--teal);color:#000;font-size:9px;font-weight:700;border-radius:3px;padding:1px 5px;cursor:default':'background:none;border:1px solid var(--br);color:var(--dim);font-size:9px;border-radius:3px;padding:1px 5px;cursor:pointer';
+        var defLabel=isDef?'\u2714 DEFAULT':'set default';
         var borderLeft=inst?'border-left:3px solid var(--grn)':(fits?'border-left:3px solid var(--br)':'border-left:3px solid var(--red)');
         var recBadge=rec?'<span style="background:rgba(78,201,176,.2);color:var(--teal);border-radius:8px;padding:0 5px;font-size:9px;font-weight:700;margin-left:4px">RECOMMENDED</span>':'';
         var instBadge=inst?'<span style="color:var(--grn);font-size:9px;font-weight:700">\u2713 INSTALLED</span>':'<span style="color:var(--dim);font-size:9px">not installed</span>';
-        var sizeInfo=c.sizeGb+'GB download \u00b7 '+c.vramGb+'GB VRAM \u00b7 '+c.ctxK+'K ctx';
+        var sizeInfo=c.sizeGb+'GB \u00b7 '+c.vramGb+'GB VRAM \u00b7 '+c.ctxK+'K ctx';
         var actionBtn=inst
-          ?'<button class="tb tb-red" onclick="vscode.postMessage({command:&#39;ollamaRemoveModel&#39;,modelId:&#39;'+c.id+'&#39;})" title="Remove">\u2717</button>'
+          ?'<button class="tb tb-red" onclick="vscode.postMessage({command:&#39;ollamaRemoveModel&#39;,modelId:&#39;'+c.id+'&#39;})" title="Remove" style="white-space:nowrap">\u2717 Remove</button>'
           :(fits
-            ?'<button class="tb" style="border-color:var(--teal);color:var(--teal)" onclick="dlModel(&#39;'+c.id+'&#39;)" title="Download">\u2B07 Pull</button>'
-            :'<span class="dim" style="font-size:9px">needs more VRAM</span>');
+            ?'<button class="tb" style="border-color:var(--teal);color:var(--teal);white-space:nowrap" onclick="dlModel(&#39;'+c.id+'&#39;)" title="Download">\u2B07 Pull</button>'
+            :'<span class="dim" style="font-size:9px;white-space:nowrap">needs more VRAM</span>');
         return '<div data-tier="'+c.tier+'" data-installed="'+(inst?'1':'0')+'" data-recommended="'+(rec?'1':'0')+'" style="display:'+(show?'flex':'none')+';align-items:center;gap:8px;padding:6px 8px;'+borderLeft+';border-bottom:1px solid var(--br)">' +
-          (inst?'<span style="'+starStyle+';cursor:pointer" title="'+(isDef?'Default':'Set as default')+'" onclick="setDef(&#39;'+c.id+'&#39;)">'+(isDef?'\u2B50':'\u2606')+'</span>':'<span style="width:14px"></span>') +
           '<div style="flex:1;min-width:0">' +
-            '<div style="font-weight:600;font-size:12px">'+c.name+recBadge+'</div>' +
-            '<div style="font-size:10px;color:var(--dim)">'+sizeInfo+'</div>' +
-            '<div style="font-size:10px;color:var(--dim)">'+c.bestFor+' \u00b7 '+c.notes+' \u00b7 '+instBadge+'</div>' +
+            '<div style="display:flex;align-items:center;gap:6px"><span style="font-weight:600;font-size:12px">'+c.name+'</span>'+recBadge+(inst?'<span style="'+defStyle+'" onclick="setDef(&#39;'+c.id+'&#39;)">'+defLabel+'</span>':'')+'</div>' +
+            '<div style="font-size:10px;color:var(--dim)">'+sizeInfo+' \u00b7 '+c.bestFor+'</div>' +
+            '<div style="font-size:10px;color:var(--dim)">'+c.notes+' \u00b7 '+instBadge+'</div>' +
           '</div>' +
-          '<div style="display:flex;gap:3px;flex-shrink:0">'+actionBtn+'</div>' +
+          '<div style="flex-shrink:0;min-width:70px;text-align:right">'+actionBtn+'</div>' +
         '</div>';
       }).join('');
       cards.style.display='';
@@ -921,7 +929,10 @@ window.addEventListener('message',({data})=>{
   if(data.type==='ollamaVersionInfo'){
     document.getElementById('ollama-chk-btn').textContent='\uD83D\uDD0D Check Ollama';
     document.getElementById('ollama-ver').textContent=data.installed||'(not running)';
-    document.getElementById('ollama-latest').textContent=data.latest?(data.installed&&data.latest!==data.installed?data.latest+' \u2190 update available':data.latest+' \u2713 up to date'):'(could not check)';
+    var ollamaUpd=data.latest&&data.installed&&data.latest!==data.installed;
+    document.getElementById('ollama-latest').textContent=data.latest?(ollamaUpd?data.latest+' \u2190 update available':data.latest+' \u2713 up to date'):'(could not check)';
+    var upgBtn=document.getElementById('ollama-upg-btn');
+    if(upgBtn)upgBtn.style.display=ollamaUpd?'':'none';
   }
   if(data.type==='apiKeyStatus'){
     const tbody=document.getElementById('api-key-body');
