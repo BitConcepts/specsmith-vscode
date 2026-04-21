@@ -539,7 +539,6 @@ function _shellPath(): string | undefined {
 // ── HTML ──────────────────────────────────────────────────────────────────────
 
 function _html(data: SettingsData): string {
-  const INST_VER = JSON.stringify(data.installedVersion ?? '');
   const activeChannel = data.releaseChannel ?? 'stable';
   const upd = data.availableVersion && data.installedVersion
     && _cmpVer(data.availableVersion, data.installedVersion) > 0;
@@ -729,9 +728,10 @@ function _html(data: SettingsData): string {
 </div>
 
 </div><!-- scroll -->
+<div id="_data" style="display:none" data-ver="${data.installedVersion ?? ''}"></div>
 <script>
 const vscode=acquireVsCodeApi();
-const INST_VER=${INST_VER};
+var INST_VER=document.getElementById('_data').dataset.ver||'';
 function sw(id){
   ['env','ollama','system'].forEach((t,i)=>{
     document.querySelectorAll('.tab')[i].classList.toggle('active',t===id);
