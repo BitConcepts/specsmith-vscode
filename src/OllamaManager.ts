@@ -33,16 +33,38 @@ export interface OllamaCatalogEntry {
 }
 
 export const OLLAMA_CATALOG: OllamaCatalogEntry[] = [
-  { id: 'llama3.2:latest',          name: 'Llama 3.2 3B',            vramGb: 2.0,  sizeGb: 2.0,  ctxK: 128, tier: 'Tiny',     bestFor: ['chat', 'quick tasks'],                    notes: 'Tiny & fast, minimal VRAM' },
-  { id: 'mistral:latest',           name: 'Mistral 7B',              vramGb: 4.5,  sizeGb: 4.1,  ctxK:  32, tier: 'Balanced', bestFor: ['chat', 'writing'],                        notes: 'Fast general-purpose' },
-  { id: 'qwen2.5:7b',               name: 'Qwen 2.5 7B',             vramGb: 5.0,  sizeGb: 4.7,  ctxK:  32, tier: 'Balanced', bestFor: ['coding', 'analysis', 'requirements'],     notes: 'Best 7B for technical work' },
-  { id: 'qwen2.5-coder:7b-instruct',name: 'Qwen 2.5 Coder 7B',      vramGb: 4.8,  sizeGb: 4.7,  ctxK:  32, tier: 'Balanced', bestFor: ['code generation', 'debugging'],            notes: 'Specialized coder model' },
-  { id: 'gemma3:12b',               name: 'Gemma 3 12B (Google)',    vramGb: 8.0,  sizeGb: 7.8,  ctxK: 128, tier: 'Capable',  bestFor: ['general', 'analysis'],                   notes: 'Google open model, 128K ctx' },
-  { id: 'phi4:latest',              name: 'Phi-4 14B (Microsoft)',   vramGb: 9.0,  sizeGb: 8.5,  ctxK:  16, tier: 'Capable',  bestFor: ['reasoning', 'analysis', 'requirements'],  notes: 'Outstanding reasoning' },
-  { id: 'qwen2.5:14b',              name: 'Qwen 2.5 14B',            vramGb: 9.0,  sizeGb: 8.9,  ctxK:  32, tier: 'Capable',  bestFor: ['coding', 'requirements engineering'],      notes: 'Best for AEE workflows' },
-  { id: 'deepseek-coder-v2:latest', name: 'DeepSeek Coder v2 16B',  vramGb: 11.0, sizeGb: 9.1,  ctxK: 128, tier: 'Capable',  bestFor: ['code generation', 'code review'],          notes: 'Top local coding model' },
-  { id: 'qwen2.5:32b',              name: 'Qwen 2.5 32B',            vramGb: 20.0, sizeGb: 19.0, ctxK:  32, tier: 'Powerful', bestFor: ['complex reasoning', 'architecture'],       notes: 'Best quality (high VRAM)' },
+  // CPU-friendly / Tiny (0-4 GB VRAM)
+  { id: 'llama3.2:latest',           name: 'Llama 3.2 3B',           vramGb: 2.0,  sizeGb: 2.0,  ctxK: 128, tier: 'Tiny',     bestFor: ['chat', 'quick tasks'],                    notes: 'CPU-friendly, minimal resources' },
+  { id: 'qwen2.5-coder:3b',          name: 'Qwen 2.5 Coder 3B',     vramGb: 2.5,  sizeGb: 2.0,  ctxK:  32, tier: 'Tiny',     bestFor: ['code generation', 'debugging'],            notes: 'Smallest coder model, CPU OK' },
+  { id: 'phi3:mini',                  name: 'Phi-3 Mini 3.8B',       vramGb: 3.0,  sizeGb: 2.3,  ctxK:   4, tier: 'Tiny',     bestFor: ['reasoning', 'chat'],                       notes: 'Microsoft, strong reasoning for size' },
+  // Balanced (4-8 GB VRAM)
+  { id: 'mistral:latest',             name: 'Mistral 7B',            vramGb: 4.5,  sizeGb: 4.1,  ctxK:  32, tier: 'Balanced', bestFor: ['chat', 'writing'],                         notes: 'Fast general-purpose' },
+  { id: 'qwen2.5:7b',                 name: 'Qwen 2.5 7B',           vramGb: 5.0,  sizeGb: 4.7,  ctxK:  32, tier: 'Balanced', bestFor: ['coding', 'analysis', 'requirements'],      notes: 'Best 7B for technical work' },
+  { id: 'qwen2.5-coder:7b-instruct',  name: 'Qwen 2.5 Coder 7B',    vramGb: 4.8,  sizeGb: 4.7,  ctxK:  32, tier: 'Balanced', bestFor: ['code generation', 'debugging'],             notes: 'Specialized coder — RECOMMENDED' },
+  { id: 'llama3.1:8b',                name: 'Llama 3.1 8B',          vramGb: 5.0,  sizeGb: 4.7,  ctxK: 128, tier: 'Balanced', bestFor: ['general', 'chat', 'coding'],               notes: 'Meta, 128K context' },
+  { id: 'codellama:7b',               name: 'Code Llama 7B',         vramGb: 4.5,  sizeGb: 3.8,  ctxK:  16, tier: 'Balanced', bestFor: ['code generation', 'code completion'],       notes: 'Meta code specialist' },
+  // Capable (8-16 GB VRAM)
+  { id: 'gemma3:12b',                 name: 'Gemma 3 12B (Google)',  vramGb: 8.0,  sizeGb: 7.8,  ctxK: 128, tier: 'Capable',  bestFor: ['general', 'analysis'],                     notes: 'Google, 128K ctx, vision' },
+  { id: 'phi4:latest',                name: 'Phi-4 14B (Microsoft)', vramGb: 9.0,  sizeGb: 8.5,  ctxK:  16, tier: 'Capable',  bestFor: ['reasoning', 'analysis', 'requirements'],   notes: 'Outstanding reasoning' },
+  { id: 'qwen2.5:14b',                name: 'Qwen 2.5 14B',          vramGb: 9.0,  sizeGb: 8.9,  ctxK:  32, tier: 'Capable',  bestFor: ['coding', 'requirements engineering'],       notes: 'Best for AEE workflows' },
+  { id: 'mistral-nemo:12b',           name: 'Mistral Nemo 12B',     vramGb: 8.0,  sizeGb: 7.1,  ctxK: 128, tier: 'Capable',  bestFor: ['coding', 'reasoning', 'multilingual'],     notes: '128K ctx, tool calling' },
+  { id: 'deepseek-coder-v2:latest',   name: 'DeepSeek Coder v2 16B',vramGb: 11.0, sizeGb: 9.1,  ctxK: 128, tier: 'Capable',  bestFor: ['code generation', 'code review'],           notes: 'Top local coding model' },
+  // Powerful (16+ GB VRAM)
+  { id: 'qwen2.5:32b',                name: 'Qwen 2.5 32B',          vramGb: 20.0, sizeGb: 19.0, ctxK:  32, tier: 'Powerful', bestFor: ['complex reasoning', 'architecture'],        notes: 'Best quality (needs 24GB)' },
+  { id: 'llama3.1:70b',               name: 'Llama 3.1 70B',         vramGb: 40.0, sizeGb: 39.0, ctxK: 128, tier: 'Powerful', bestFor: ['complex reasoning', 'analysis'],            notes: 'Flagship (needs 48GB+)' },
+  { id: 'qwen2.5-coder:32b',          name: 'Qwen 2.5 Coder 32B',   vramGb: 20.0, sizeGb: 19.0, ctxK:  32, tier: 'Powerful', bestFor: ['code generation', 'architecture'],           notes: 'Best local coder (needs 24GB)' },
 ];
+
+/**
+ * Recommend the best default model based on available VRAM.
+ * Prefers qwen2.5-coder variants. Falls back to smallest model for CPU.
+ */
+export function recommendDefaultModel(vramGb: number): string {
+  if (vramGb >= 16) { return 'qwen2.5-coder:7b-instruct'; } // plenty of room
+  if (vramGb >= 8)  { return 'qwen2.5-coder:7b-instruct'; } // fits well
+  if (vramGb >= 4)  { return 'qwen2.5-coder:3b'; }          // tight but works
+  return 'llama3.2:latest';                                   // CPU fallback
+}
 
 // Task → model tag mapping for selectModelForTask
 export const TASK_SUGGESTIONS: Record<string, string[]> = {

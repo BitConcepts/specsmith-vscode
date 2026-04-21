@@ -123,7 +123,7 @@ interface Msg {
     | 'ollamaRemoveModel' | 'ollamaUpdateModel' | 'ollamaUpdateAll'
     | 'checkOllamaVersion' | 'ollamaUpgrade'
     | 'setApiKey' | 'verifyApiKey' | 'getApiKeyStatus' | 'setDefaultProvider'
-    | 'getGpuInfo' | 'setOllamaCtx' | 'setDefaultOllamaModel';
+    | 'getGpuInfo' | 'setOllamaCtx' | 'setDefaultOllamaModel' | 'ollamaPullModel';
   channel?: string;
   modelId?: string;
   provider?: string;
@@ -268,6 +268,14 @@ async function _handleMsg(msg: Msg): Promise<void> {
     case 'setDefaultOllamaModel': {
       const mdl = msg.value ?? '';
       void vscode.workspace.getConfiguration('specsmith').update('defaultModel', mdl, vscode.ConfigurationTarget.Global);
+      break;
+    }
+
+    case 'ollamaPullModel': {
+      if (!msg.modelId) { break; }
+      const pullTerm = _getTerminal('specsmith');
+      pullTerm.sendText(`ollama pull "${msg.modelId}"`);
+      pullTerm.show();
       break;
     }
 
@@ -475,16 +483,32 @@ async function _sendOllamaModels(): Promise<void> {
   if (!_panel) { return; }
   try {
     const http = await import('http');
-    const models = await new Promise<Array<{ name: string; size: number; modified_at: string }>>((resolve) => {
-      let data = '';
-      http.get('http://localhost:11434/api/tags', (r) => {
-        r.on('data', (c: Buffer) => { data += c.toString(); });
-        r.on('end', () => { try { const j = JSON.parse(data) as { models?: Array<{ name: string; size: number; modified_at: string }> }; resolve(j.models ?? []); } catch { resolve([]); } });
-      }).on('error', () => resolve([]));
+    const { OllamaManager, OLLAMA_CATALOG, recommendDefaultModel } = await import('./OllamaManager');
+    const [models, vramGb] = await Promise.all([
+      new Promise<Array<{ name: string; size: number; modified_at: string; digest?: string }>>((resolve) => {
+        let data = '';
+        http.get('http://localhost:11434/api/tags', (r) => {
+          r.on('data', (c: Buffer) => { data += c.toString(); });
+          r.on('end', () => { try { const j = JSON.parse(data) as { models?: Array<{ name: string; size: number; modified_at: string; digest?: string }> }; resolve(j.models ?? []); } catch { resolve([]); } });
+        }).on('error', () => resolve([]));
+      }),
+      OllamaManager.getVramGb(),
+    ]);
+    const installedIds = new Set(models.map((m) => m.name));
+    const recommended = recommendDefaultModel(vramGb);
+    const budget = vramGb > 0 ? vramGb * 0.9 : 999;
+    const catalog = OLLAMA_CATALOG.map((c) => ({
+      id: c.id, name: c.name, sizeGb: c.sizeGb, vramGb: c.vramGb,
+      tier: c.tier, bestFor: c.bestFor.join(', '), notes: c.notes, ctxK: c.ctxK,
+      installed: installedIds.has(c.id),
+      fits: c.vramGb <= budget,
+      recommended: c.id === recommended,
+    }));
+    _panel.webview.postMessage({
+      type: 'ollamaModels', models, catalog, vramGb, recommended,
     });
-    _panel.webview.postMessage({ type: 'ollamaModels', models });
   } catch {
-    _panel.webview.postMessage({ type: 'ollamaModels', models: [] });
+    _panel.webview.postMessage({ type: 'ollamaModels', models: [], catalog: [], vramGb: 0, recommended: '' });
   }
 }
 
@@ -691,13 +715,19 @@ function _html(data: SettingsData): string {
   <button class="btn" id="ollama-chk-btn" onclick="chkOllama()">&#x1f50d; Check Ollama</button>
   <button class="btn-sm" onclick="ollamaUpgrade()">\u2b06 Upgrade Ollama</button>
 </div>
-<h3>Installed Models</h3>
-<div class="info-box" style="font-size:10px">\u2B50 = default model for new sessions. Click \u2B50 on any row to change. Models older than 30 days show \u26a0.</div>
+<h3>Models</h3>
+<div class="info-box" style="font-size:10px">\u2B50 = default. Click star to change. GPU: <span id="gpu-inline">detecting\u2026</span></div>
+<div style="display:flex;gap:4px;margin-bottom:6px">
+  <button class="btn-sm" id="flt-all" onclick="fltMdl('all')" style="border-color:var(--teal);color:var(--teal)">All</button>
+  <button class="btn-sm" id="flt-installed" onclick="fltMdl('installed')">Installed</button>
+  <button class="btn-sm" id="flt-available" onclick="fltMdl('available')">Available</button>
+  <button class="btn-sm" id="flt-rec" onclick="fltMdl('recommended')">\u2B50 Recommended</button>
+</div>
 <div id="ollama-mdl-load" class="dim" style="margin:4px 0">Checking models\u2026</div>
-<div id="ollama-mdl-cards" style="display:none" data-default="${data.defaultModel}"></div>
+<div id="ollama-mdl-cards" style="display:none" data-default="${data.defaultModel}" data-filter="all"></div>
 <div class="btn-row">
   <button class="btn-sm" onclick="loadModels()">&#x21BA; Refresh</button>
-  <button class="btn-sm" id="btn-update-all" style="display:none" onclick="vscode.postMessage({command:'ollamaUpdateAll'})">\u2b06 Update All</button>
+  <button class="btn-sm" id="btn-update-all" style="display:none" onclick="vscode.postMessage({command:'ollamaUpdateAll'})">\u2b06 Update Stale</button>
 </div>
 <h3>Context Window</h3>
 <div class="info-box" style="font-size:10px">Controls how much text the model can process per turn. Auto uses GPU VRAM to select the best size. Larger windows use more VRAM.</div>
@@ -780,6 +810,24 @@ function setDef(name){
   if(cards)cards.dataset.default=name;
   loadModels();
 }
+function fltMdl(f){
+  var cards=document.getElementById('ollama-mdl-cards');
+  if(cards)cards.dataset.filter=f;
+  ['all','installed','available','recommended'].forEach(function(id){
+    var b=document.getElementById('flt-'+id);
+    if(b){b.style.borderColor=id===f?'var(--teal)':'';b.style.color=id===f?'var(--teal)':'';}
+  });
+  // re-render with current data
+  var items=cards?cards.querySelectorAll('[data-tier]'):[];
+  items.forEach(function(el){
+    var t=el.dataset.tier||'';
+    var inst=el.dataset.installed==='1';
+    var rec=el.dataset.recommended==='1';
+    var show=f==='all'||(f==='installed'&&inst)||(f==='available'&&!inst)||(f==='recommended'&&rec);
+    el.style.display=show?'':'none';
+  });
+}
+function dlModel(id){vscode.postMessage({command:'ollamaPullModel',modelId:id});}
 window.addEventListener('message',({data})=>{
   if(data.type==='versionInfo'){
     const btn=document.getElementById('chk-btn');
@@ -815,39 +863,52 @@ window.addEventListener('message',({data})=>{
     var now=Date.now();
     var STALE_MS=30*24*60*60*1000;
     var savedDef=cards?.dataset?.default||'';
+    var curFilter=cards?.dataset?.filter||'all';
     var hasStale=false;
-    if(cards&&data.models&&data.models.length){
-      cards.innerHTML=(data.models||[]).map(function(m){
-        var gb=m.size>0?(m.size/1073741824).toFixed(1)+'GB':'';
-        var mod=(m.modified_at||'').slice(0,10);
-        var modMs=m.modified_at?new Date(m.modified_at).getTime():0;
-        var stale=modMs>0&&(now-modMs)>STALE_MS;
-        if(stale)hasStale=true;
-        var isDef=m.name===savedDef;
-        var dg=(m.digest||'').slice(0,12);
+    var gpuInline=document.getElementById('gpu-inline');
+    if(gpuInline)gpuInline.textContent=data.vramGb>0?data.vramGb.toFixed(1)+' GB VRAM':'CPU only (no GPU)';
+    var catalog=data.catalog||[];
+    if(cards&&catalog.length){
+      cards.innerHTML=catalog.map(function(c){
+        var inst=c.installed;
+        var rec=c.recommended;
+        var fits=c.fits;
+        var isDef=c.id===savedDef;
+        var show=curFilter==='all'||(curFilter==='installed'&&inst)||(curFilter==='available'&&!inst)||(curFilter==='recommended'&&rec);
         var starStyle=isDef?'color:var(--teal);font-size:14px':'color:var(--dim);font-size:14px;opacity:.4;cursor:pointer';
-        var starTitle=isDef?'Default model':'Click to set as default';
-        return '<div style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-bottom:1px solid var(--br)">' +
-          '<span style="'+starStyle+';cursor:pointer" title="'+starTitle+'" onclick="setDef(&#39;'+m.name+'&#39;)">'+(isDef?'\u2B50':'\u2606')+'</span>' +
+        var borderLeft=inst?'border-left:3px solid var(--grn)':(fits?'border-left:3px solid var(--br)':'border-left:3px solid var(--red)');
+        var recBadge=rec?'<span style="background:rgba(78,201,176,.2);color:var(--teal);border-radius:8px;padding:0 5px;font-size:9px;font-weight:700;margin-left:4px">RECOMMENDED</span>':'';
+        var instBadge=inst?'<span style="color:var(--grn);font-size:9px;font-weight:700">\u2713 INSTALLED</span>':'<span style="color:var(--dim);font-size:9px">not installed</span>';
+        var sizeInfo=c.sizeGb+'GB download \u00b7 '+c.vramGb+'GB VRAM \u00b7 '+c.ctxK+'K ctx';
+        var actionBtn=inst
+          ?'<button class="tb tb-red" onclick="vscode.postMessage({command:&#39;ollamaRemoveModel&#39;,modelId:&#39;'+c.id+'&#39;})" title="Remove">\u2717</button>'
+          :(fits
+            ?'<button class="tb" style="border-color:var(--teal);color:var(--teal)" onclick="dlModel(&#39;'+c.id+'&#39;)" title="Download">\u2B07 Pull</button>'
+            :'<span class="dim" style="font-size:9px">needs more VRAM</span>');
+        return '<div data-tier="'+c.tier+'" data-installed="'+(inst?'1':'0')+'" data-recommended="'+(rec?'1':'0')+'" style="display:'+(show?'flex':'none')+';align-items:center;gap:8px;padding:6px 8px;'+borderLeft+';border-bottom:1px solid var(--br)">' +
+          (inst?'<span style="'+starStyle+';cursor:pointer" title="'+(isDef?'Default':'Set as default')+'" onclick="setDef(&#39;'+c.id+'&#39;)">'+(isDef?'\u2B50':'\u2606')+'</span>':'<span style="width:14px"></span>') +
           '<div style="flex:1;min-width:0">' +
-            '<div style="font-weight:600;font-size:12px">'+m.name+'</div>' +
-            '<div style="font-size:10px;color:var(--dim)">'+gb+(dg?' \u00b7 '+dg:'')+(mod?' \u00b7 '+mod:'')+(stale?' \u26a0 stale':'')+'</div>' +
+            '<div style="font-weight:600;font-size:12px">'+c.name+recBadge+'</div>' +
+            '<div style="font-size:10px;color:var(--dim)">'+sizeInfo+'</div>' +
+            '<div style="font-size:10px;color:var(--dim)">'+c.bestFor+' \u00b7 '+c.notes+' \u00b7 '+instBadge+'</div>' +
           '</div>' +
-          '<div style="display:flex;gap:3px;flex-shrink:0">' +
-            (stale?'<button class="tb" style="border-color:var(--amb);color:var(--amb)" onclick="vscode.postMessage({command:&#39;ollamaUpdateModel&#39;,modelId:&#39;'+m.name+'&#39;})" title="Update available">\u2b06</button>':'')+
-            '<button class="tb tb-red" onclick="vscode.postMessage({command:&#39;ollamaRemoveModel&#39;,modelId:&#39;'+m.name+'&#39;})" title="Remove">\u2717</button>' +
-          '</div>' +
+          '<div style="display:flex;gap:3px;flex-shrink:0">'+actionBtn+'</div>' +
         '</div>';
       }).join('');
       cards.style.display='';
       load.style.display='none';
+    }else if(data.models&&data.models.length){
+      // Fallback: just show installed models if no catalog
+      cards.innerHTML=data.models.map(function(m){return '<div style="padding:4px 8px;border-bottom:1px solid var(--br)">'+m.name+'</div>';}).join('');
+      cards.style.display='';
+      load.style.display='none';
     }else{
       if(cards)cards.style.display='none';
-      load.textContent='No Ollama models installed';
+      load.textContent='Ollama not running or no models available';
       load.style.display='';
     }
     var uab=document.getElementById('btn-update-all');
-    if(uab)uab.style.display=hasStale?'':'none';
+    if(uab)uab.style.display=(data.models||[]).some(function(m){var ms=m.modified_at?new Date(m.modified_at).getTime():0;return ms>0&&(now-ms)>STALE_MS;})?'':'none';
   }
   if(data.type==='gpuInfo'){
     var ge=document.getElementById('ollama-gpu');
