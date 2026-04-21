@@ -457,7 +457,7 @@ export function activate(context: vscode.ExtensionContext): void {
       const candidates = ['scaffold.yml', 'scaffold.yaml', '.specsmith/config.yml'];
       const found = candidates.map((c) => path.join(projectDir, c)).find(fs.existsSync);
       if (found) {
-        await vscode.window.showTextDocument(vscode.Uri.file(found));
+        await vscode.window.showTextDocument(vscode.Uri.file(found), { viewColumn: vscode.ViewColumn.One });
       } else {
         void vscode.window.showWarningMessage('scaffold.yml not found. Run specsmith init first.');
       }

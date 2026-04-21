@@ -411,7 +411,9 @@ async function _handleMsg(msg: GovMsg): Promise<void> {
     case 'openFile':
       if (msg.file) {
         const fp = path.join(_projectDir, msg.file);
-        if (fs.existsSync(fp)) { void vscode.window.showTextDocument(vscode.Uri.file(fp)); }
+        if (fs.existsSync(fp)) {
+          void vscode.window.showTextDocument(vscode.Uri.file(fp), { viewColumn: vscode.ViewColumn.One });
+        }
       }
       break;
 
@@ -942,12 +944,14 @@ function _html(data: ProjectData): string {
     `<input type="checkbox" name="aux_disc" value="${d.value}"${selAux.includes(d.value) ? ' checked' : ''}> ${d.label}</label>`
   ).join('');
 
-  const fileRows = data.govFiles.map(f => f.exists
-    ? `<tr><td class="ok">✓</td><td>${f.label}</td><td class="dim">${f.lines} lines</td>` +
-      `<td><button class="tb" onclick="openFile('${f.rel}')">Open</button></td></tr>`
-    : `<tr><td class="miss">✗</td><td class="dim">${f.label}</td><td class="dim">—</td>` +
-      `<td><button class="add-btn" onclick="addFile('${f.addCmd ?? f.rel}')">${f.addCmd === 'rename' ? 'Rename' : 'Add'}</button></td></tr>`
-  ).join('');
+  const fileRows = data.govFiles.map(f => {
+    const shortName = f.rel.split('/').pop() || f.label;
+    return f.exists
+      ? `<tr><td class="ok">✓</td><td title="${f.rel}">${shortName}</td><td class="dim">${f.lines} lines</td>` +
+        `<td><button class="tb" onclick="openFile('${f.rel}')">Open</button></td></tr>`
+      : `<tr><td class="miss">✗</td><td class="dim" title="${f.rel}">${shortName}</td><td class="dim">—</td>` +
+        `<td><button class="add-btn" onclick="addFile('${f.addCmd ?? f.rel}')">${f.addCmd === 'rename' ? 'Rename' : 'Add'}</button></td></tr>`;
+  }).join('');
 
   // Build phase-aware prompt HTML (must be done outside the template literal)
   const _guidedLabel = (() => { const c = PHASE_CATALOG[data.phase.key]; return c ? c.emoji + ' ' + c.label : data.phase.label; })();

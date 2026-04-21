@@ -763,10 +763,10 @@ function getSys(){
   vscode.postMessage({command:'getSysInfo'});
 }
 function loadModels(){
-  const load=document.getElementById('ollama-mdl-load');
-  const tbl=document.getElementById('ollama-mdl-table');
-  load.textContent='Loading\u2026';load.style.display='';
-  if(tbl)tbl.style.display='none';
+  var load=document.getElementById('ollama-mdl-load');
+  var cards=document.getElementById('ollama-mdl-cards');
+  if(load){load.textContent='Loading\u2026';load.style.display='';}
+  if(cards)cards.style.display='none';
   vscode.postMessage({command:'getOllamaModels'});
 }
 function chkOllama(){
