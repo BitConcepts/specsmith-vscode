@@ -1374,12 +1374,12 @@ window.addEventListener('message',({data})=>{
     if(!tbody||!tbl||!load)return;
     const tools=data.tools||[];
     if(!tools.length){load.textContent='No tools found — does scaffold.yml exist?';load.style.display='';return;}
-    tbody.innerHTML=tools.map(t=>{
-      const ok=t.installed;
-      const icon=ok?'<span class="ok">\u2713</span>':'<span class="miss">\u2717</span>';
-      const ver=t.version?\`<span class="dim">\${t.version}</span>\`:'<span class="dim">—</span>';
-      const btn=ok?'':\`<button class="tb" onclick="installTool('\${t.name}')">Install</button>\`;
-      return \`<tr><td>\${icon}</td><td>\${t.name}</td><td class="dim">\${t.category}</td><td>\${ver}</td><td>\${btn}</td></tr>\`;
+    tbody.innerHTML=tools.map(function(t){
+      var ok=t.installed;
+      var icon=ok?'<span class="ok">\u2713</span>':'<span class="miss">\u2717</span>';
+      var ver=t.version?'<span class="dim">'+t.version+'</span>':'<span class="dim">\u2014</span>';
+      var btn=ok?'':'<button class="tb" onclick="installTool(\''+t.name+'\')"' + '>Install</button>';
+      return '<tr><td>'+icon+'</td><td>'+t.name+'</td><td class="dim">'+t.category+'</td><td>'+ver+'</td><td>'+btn+'</td></tr>';
     }).join('');
     load.style.display='none';
     tbl.style.display='';
