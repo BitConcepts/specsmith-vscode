@@ -113,13 +113,15 @@ interface GovMsg {
     | 'saveScaffold' | 'runCommand' | 'sendToAgent' | 'openFile' | 'refresh'
     | 'addFile' | 'detectLanguages' | 'phaseNext' | 'phaseSet' | 'scanProject'
     | 'saveExecution' | 'scanTools' | 'toolInstall' | 'detectTools' | 'detectDisciplines'
-    | 'reportIssue' | 'agentTask';
+    | 'reportIssue' | 'agentTask' | 'saveAgentConfig';
   scaffold?: ScaffoldData; cmd?: string; prompt?: string; file?: string; addType?: string;
   phaseKey?: string;
   profileName?: string; customAllowed?: string; customBlocked?: string; customBlockedTools?: string;
   autoApprove?: boolean;
   toolKey?: string;
   agentSub?: string;
+  agentProvider?: string; agentModel?: string; agentPrimary?: string;
+  agentUtility?: string; agentCtx?: string; agentIter?: string;
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -464,6 +466,36 @@ async function _handleMsg(msg: GovMsg): Promise<void> {
     case 'reportIssue':
       void vscode.commands.executeCommand('specsmith.reportIssue');
       break;
+
+    case 'saveAgentConfig': {
+      // Save agent settings to scaffold.yml under agents: key
+      const scaffoldPath = path.join(_projectDir, 'scaffold.yml');
+      try {
+        let raw = fs.existsSync(scaffoldPath)
+          ? fs.readFileSync(scaffoldPath, 'utf8') : '';
+        // Remove existing agent_ and agents_ keys
+        raw = raw.replace(
+          /^(agent_provider|agent_model|agent_num_ctx|agents_primary_model|agents_utility_model|agents_max_iterations):.*\n?/gm,
+          '',
+        );
+        // Append new values (only non-empty)
+        const lines: string[] = [];
+        if (msg.agentProvider) { lines.push(`agent_provider: ${msg.agentProvider}`); }
+        if (msg.agentModel) { lines.push(`agent_model: ${msg.agentModel}`); }
+        if (msg.agentCtx && msg.agentCtx !== '0') { lines.push(`agent_num_ctx: ${msg.agentCtx}`); }
+        if (msg.agentPrimary) { lines.push(`agents_primary_model: ${msg.agentPrimary}`); }
+        if (msg.agentUtility) { lines.push(`agents_utility_model: ${msg.agentUtility}`); }
+        if (msg.agentIter && msg.agentIter !== '10') { lines.push(`agents_max_iterations: ${msg.agentIter}`); }
+        if (lines.length > 0) {
+          raw = raw.trimEnd() + '\n' + lines.join('\n') + '\n';
+        }
+        fs.writeFileSync(scaffoldPath, raw, 'utf8');
+        void vscode.window.showInformationMessage('Agent config saved to scaffold.yml');
+      } catch (e) {
+        void vscode.window.showWarningMessage(`Failed to save agent config: ${e}`);
+      }
+      break;
+    }
 
     case 'agentTask': {
       const sub = msg.agentSub ?? 'run';
@@ -1017,9 +1049,10 @@ function _html(data: ProjectData): string {
               font-size:11px;font-weight:700;color:var(--teal);white-space:nowrap}
   .phase-desc{font-size:10px;color:var(--dim);flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .phase-prog{font-size:10px;color:var(--dim);white-space:nowrap}
-  .phase-sel{background:none;border:1px solid var(--br);border-radius:3px;color:var(--dim);
-             font-size:10px;padding:1px 4px;cursor:pointer}
+  .phase-sel{background:var(--ib);color:var(--if);border:1px solid var(--br);border-radius:3px;
+             font-size:10px;padding:2px 6px;cursor:pointer;font-family:var(--fn)}
   .phase-sel:hover{border-color:var(--teal);color:var(--teal)}
+  .phase-sel option{background:var(--sf);color:var(--fg)}
 </style></head>
 <body>
 <div class="topbar">
@@ -1049,6 +1082,7 @@ ${(() => {
   <button class="tab" onclick="sw('files')">&#x1f4cb; Files</button>
   <button class="tab" onclick="sw('actions')">&#x26a1; Actions</button>
   <button class="tab" onclick="sw('execution')">&#x1f6e1; Execution</button>
+  <button class="tab" onclick="sw('agent')">&#x1f916; Agent</button>
 </div>
 <div class="scroll">
 
@@ -1198,6 +1232,50 @@ ${_phasePromptsHtml}
 <h3>Always Available</h3>
 ${_alwaysPromptsHtml}
 </div>
+
+<!-- Agent tab -->
+<div id="t-agent" class="tab-pane">
+<h3>Project Agent Configuration</h3>
+<div class="info-box" style="font-size:10px">Per-project agent settings. Overrides global defaults from Global Settings. Saved to <code>scaffold.yml</code> under <code>agents:</code>.</div>
+<div class="row">
+  <div class="fg"><label class="fl">Provider</label>
+    <select id="ag-provider">
+      <option value="">(use global default)</option>
+      <option value="ollama"${(s as Record<string,any>).agent_provider === 'ollama' ? ' selected' : ''}>Ollama (local)</option>
+      <option value="anthropic"${(s as Record<string,any>).agent_provider === 'anthropic' ? ' selected' : ''}>Anthropic</option>
+      <option value="openai"${(s as Record<string,any>).agent_provider === 'openai' ? ' selected' : ''}>OpenAI</option>
+      <option value="gemini"${(s as Record<string,any>).agent_provider === 'gemini' ? ' selected' : ''}>Gemini</option>
+    </select>
+  </div>
+  <div class="fg"><label class="fl">Model</label>
+    <input type="text" id="ag-model" value="${(s as Record<string,any>).agent_model ?? ''}" placeholder="(use global default)">
+  </div>
+</div>
+<div class="row">
+  <div class="fg"><label class="fl">AG2 Primary Model</label>
+    <input type="text" id="ag-primary" value="${(s as Record<string,any>).agents_primary_model ?? ''}" placeholder="qwen2.5:14b">
+  </div>
+  <div class="fg"><label class="fl">AG2 Utility Model</label>
+    <input type="text" id="ag-utility" value="${(s as Record<string,any>).agents_utility_model ?? ''}" placeholder="qwen2.5:14b">
+  </div>
+</div>
+<div class="fg"><label class="fl">Context Length (0 = auto from GPU)</label>
+  <select id="ag-ctx">
+    <option value="0"${!(s as Record<string,any>).agent_num_ctx ? ' selected' : ''}>Auto</option>
+    <option value="4096"${(s as Record<string,any>).agent_num_ctx === '4096' ? ' selected' : ''}>4K</option>
+    <option value="8192"${(s as Record<string,any>).agent_num_ctx === '8192' ? ' selected' : ''}>8K</option>
+    <option value="16384"${(s as Record<string,any>).agent_num_ctx === '16384' ? ' selected' : ''}>16K</option>
+    <option value="32768"${(s as Record<string,any>).agent_num_ctx === '32768' ? ' selected' : ''}>32K</option>
+  </select>
+</div>
+<div class="fg"><label class="fl">Max Iterations per Agent Turn</label>
+  <input type="text" id="ag-iter" value="${(s as Record<string,any>).agents_max_iterations ?? '10'}" style="width:60px">
+</div>
+<div class="btn-row">
+  <button class="btn" onclick="saveAgent()">\uD83D\uDCBE Save Agent Config</button>
+</div>
+</div>
+
 </div><!-- scroll -->
 
 <script>
@@ -1206,10 +1284,20 @@ const LANGUAGES=${JSON.stringify(LANGUAGES)};
 const FPGA_TOOLS=${JSON.stringify(FPGA_TOOLS)};
 
 function sw(id){
-  const tabs=['project','tools','files','actions','execution'];
+  const tabs=['project','tools','files','actions','execution','agent'];
   document.querySelectorAll('.tab').forEach((t,i)=>t.classList.toggle('active',tabs[i]===id));
   document.querySelectorAll('.tab-pane').forEach(p=>p.classList.toggle('active',p.id==='t-'+id));
   if(id==='execution')scanToolsNow();
+}
+function saveAgent(){
+  vscode.postMessage({command:'saveAgentConfig',
+    agentProvider:document.getElementById('ag-provider').value,
+    agentModel:document.getElementById('ag-model').value,
+    agentPrimary:document.getElementById('ag-primary').value,
+    agentUtility:document.getElementById('ag-utility').value,
+    agentCtx:document.getElementById('ag-ctx').value,
+    agentIter:document.getElementById('ag-iter').value,
+  });
 }
 function execProfileChanged(){
   const sel=document.getElementById('exec-profile');
