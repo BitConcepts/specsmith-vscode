@@ -147,10 +147,20 @@ async function _handleMsg(msg: Msg): Promise<void> {
 
     case 'installUpdate': {
       const ch = vscode.workspace.getConfiguration('specsmith').get<string>('releaseChannel', 'stable') as 'stable' | 'pre-release';
+      const oldVer = getVenvSpecsmithVersion() ?? '';
       const term = _getTerminal("specsmith");
       term.sendText(buildUpdateVenvCommand(ch));
       term.show();
-      _panel?.webview.postMessage({ type: 'showRestartBanner', message: '\u2713 Updating specsmith\u2026 Restart VS Code when terminal finishes.', needsRestart: true });
+      // Poll venv version every 3s — when it changes, the install is done
+      const poll = setInterval(() => {
+        const newVer = getVenvSpecsmithVersion();
+        if (newVer && newVer !== oldVer) {
+          clearInterval(poll);
+          _panel?.webview.postMessage({ type: 'installDone', version: newVer });
+        }
+      }, 3000);
+      // Safety: stop polling after 5 minutes
+      setTimeout(() => clearInterval(poll), 5 * 60 * 1000);
       break;
     }
 
@@ -161,7 +171,9 @@ async function _handleMsg(msg: Msg): Promise<void> {
     case 'setReleaseChannel': {
       if (!msg.channel) { break; }
       void vscode.workspace.getConfiguration('specsmith').update('releaseChannel', msg.channel, vscode.ConfigurationTarget.Global);
-      void _checkVersion(_ctx);
+      // Auto-check and prompt: the webview versionInfo handler will show
+      // the Install Update button if a newer version is found.
+      await _checkVersion(_ctx);
       break;
     }
 
@@ -788,7 +800,7 @@ function chkVer(){
 }
 function installUpd(){
   const btn=document.querySelector('.btn-upd');
-  if(btn){btn.textContent='Installing\u2026';btn.disabled=true;}
+  if(btn){btn.textContent='\u23f3 Installing\u2026';btn.disabled=true;btn.style.opacity='0.7';}
   vscode.postMessage({command:'installUpdate'});
 }
 function getSys(){
@@ -851,9 +863,21 @@ window.addEventListener('message',({data})=>{
       }else if(installed){document.getElementById('ver-avail').textContent=data.available+' \u2713 (current)';}
     }
   }
-  if(data.type==='installStarted'){
+  if(data.type==='installDone'){
+    // Install finished — replace Installing button with Restart button inline
     const row=document.getElementById('chk-btn')?.closest('.btn-row');
-    if(row){const old=row.querySelector('.btn-upd,button[disabled]');if(old)old.remove();const rel=document.createElement('button');rel.className='btn-rel';rel.textContent='\u21BA Reload Window';rel.onclick=()=>vscode.postMessage({command:'reloadWindow'});row.appendChild(rel);}
+    if(row){
+      const old=row.querySelector('.btn-upd');
+      if(old)old.remove();
+      const rel=document.createElement('button');rel.className='btn btn-rel';rel.style.cssText='background:var(--teal);color:#000;font-weight:700';
+      rel.textContent='\u21BA Restart VS Code';rel.onclick=()=>vscode.postMessage({command:'reloadWindow'});row.appendChild(rel);
+    }
+    // Update displayed version
+    if(data.version){
+      document.getElementById('ver-installed').textContent=data.version;
+      INST_VER=data.version;
+      document.getElementById('ver-avail').textContent=data.version+' \u2713 (current)';
+    }
   }
   if(data.type==='sysInfo'){
     const g=document.getElementById('sys-grid');
