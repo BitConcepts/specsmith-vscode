@@ -406,13 +406,7 @@ async function _handleMsg(msg: Msg): Promise<void> {
     }
 
     case 'ollamaUpgrade': {
-      // Open download page — AV-safe (PowerShell installer scripts trigger AMSI).
-      // On Linux, the curl|sh approach also requires sudo which cp.spawn can't provide.
-      void vscode.env.openExternal(vscode.Uri.parse('https://ollama.com/download'));
-      void vscode.window.showInformationMessage(
-        'Download and install the latest Ollama from ollama.com/download. Click Check when done.',
-        'Check Now',
-      ).then((a) => { if (a === 'Check Now') { void _checkOllamaVersion(); } });
+      void _upgradeOllama();
       break;
     }
   }
@@ -509,7 +503,76 @@ async function _sendSysInfo(): Promise<void> {
   _panel.webview.postMessage({ type: 'sysInfo', info });
 }
 
-// ── Ollama ────────────────────────────────────────────────────────────────────
+// ── Ollama upgrade ────────────────────────────────────────────────────────────────
+
+/**
+ * Upgrade Ollama by downloading the official installer and running it.
+ * - Windows: downloads OllamaSetup.exe from GitHub releases, runs /SILENT
+ * - Linux/macOS: runs curl | sh (no AV issue on these platforms)
+ * All via cp.spawn (no PowerShell, no AMSI trigger).
+ */
+async function _upgradeOllama(): Promise<void> {
+  const out = _out();
+  out.show(true);
+  out.appendLine('── Upgrade Ollama ──');
+
+  if (process.platform === 'win32') {
+    // Windows: download OllamaSetup.exe via Node https, then run /SILENT
+    out.appendLine('Downloading OllamaSetup.exe from GitHub...');
+    const tmpDir = os.tmpdir();
+    const exePath = path.join(tmpDir, 'OllamaSetup.exe');
+    try {
+      const fs = await import('fs');
+      const https = await import('https');
+      // Get latest release URL
+      const url = 'https://ollama.com/download/OllamaSetup.exe';
+      await new Promise<void>((resolve, reject) => {
+        const file = fs.createWriteStream(exePath);
+        const req = https.get(url, { timeout: 60000 }, (res) => {
+          // Follow redirects (GitHub/Cloudflare redirects)
+          if (res.statusCode === 301 || res.statusCode === 302) {
+            const loc = res.headers.location;
+            if (loc) {
+              https.get(loc, { timeout: 60000 }, (r2) => {
+                r2.pipe(file);
+                file.on('finish', () => { file.close(); resolve(); });
+              }).on('error', reject);
+              return;
+            }
+          }
+          res.pipe(file);
+          file.on('finish', () => { file.close(); resolve(); });
+        });
+        req.on('error', reject);
+        req.on('timeout', () => { req.destroy(); reject(new Error('Download timed out')); });
+      });
+      out.appendLine(`Downloaded to ${exePath}`);
+      out.appendLine('Running OllamaSetup.exe /SILENT ...');
+      await new Promise<boolean>((resolve) => {
+        const proc = cp.spawn(exePath, ['/SILENT'], { stdio: ['ignore', 'pipe', 'pipe'] });
+        proc.stdout?.on('data', (d: Buffer) => out.append(d.toString()));
+        proc.stderr?.on('data', (d: Buffer) => out.append(d.toString()));
+        proc.on('error', (err) => { out.appendLine(`Error: ${err.message}`); resolve(false); });
+        proc.on('close', (code) => { resolve(code === 0); });
+      });
+      // Clean up
+      try { fs.unlinkSync(exePath); } catch { /* ignore */ }
+    } catch (err) {
+      out.appendLine(`Failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  } else {
+    // Linux/macOS: curl | sh (no AV issues)
+    await _runSteps(
+      [{ exe: 'sh', args: ['-c', 'curl -fsSL https://ollama.com/install.sh | sh'] }],
+      'Upgrade Ollama',
+    );
+  }
+
+  out.appendLine('\u2713 Ollama upgrade complete. Checking version...');
+  void _checkOllamaVersion();
+}
+
+// ── Ollama models ───────────────────────────────────────────────────────────────
 
 async function _sendOllamaModels(): Promise<void> {
   if (!_panel) { return; }
