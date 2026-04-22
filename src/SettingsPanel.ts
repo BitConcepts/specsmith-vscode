@@ -187,8 +187,9 @@ async function _handleMsg(msg: Msg): Promise<void> {
         // Read version via Python import (not marker, which we just invalidated)
         const newVer = getVenvSpecsmithVersion();
         if (newVer) { writeVersionMarker(newVer); }
-        // Refresh the entire panel so Environment section updates
+        // Refresh the entire panel + re-check version to update banner
         _reload();
+        if (_ctx) { void _checkVersion(_ctx); }
       })();
       break;
     }
@@ -400,12 +401,20 @@ async function _handleMsg(msg: Msg): Promise<void> {
     }
 
     case 'ollamaUpgrade': {
-      // Cross-platform: open the Ollama download page in the browser.
-      // Ollama doesn't provide a reliable CLI self-update on all platforms.
-      void vscode.env.openExternal(vscode.Uri.parse('https://ollama.ai/download'));
-      void vscode.window.showInformationMessage(
-        'Opened ollama.ai/download in your browser. Download the latest installer for your platform.',
-      );
+      // Platform-specific Ollama installer via CLI (cross-platform)
+      const ollamaSteps: SpawnCmd[] = [];
+      if (process.platform === 'win32') {
+        // Windows: PowerShell one-liner installer
+        ollamaSteps.push({ exe: 'powershell', args: ['-NoProfile', '-Command', 'irm https://ollama.com/install.ps1 | iex'] });
+      } else {
+        // macOS + Linux: shell installer
+        ollamaSteps.push({ exe: 'sh', args: ['-c', 'curl -fsSL https://ollama.com/install.sh | sh'] });
+      }
+      void (async () => {
+        await _runSteps(ollamaSteps, 'Upgrade Ollama');
+        // Re-check version after upgrade and update banner
+        void _checkOllamaVersion();
+      })();
       break;
     }
   }
