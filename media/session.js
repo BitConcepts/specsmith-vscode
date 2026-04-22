@@ -38,9 +38,21 @@ function extractErrSummary(r){
     }
     return 'Python exception (see details)';
   }
-  // Non-zero exit: use first meaningful line as summary
-  const lines=r.split('\n').map(l=>l.trim()).filter(l=>l&&!l.startsWith('#'));
-  return lines[0]?.slice(0,150)||r.slice(0,150);
+  // Skip [exit N] prefix and find the first meaningful content line
+  var lines=r.split('\n').map(function(l){return l.trim();}).filter(function(l){return l&&!l.startsWith('#');});
+  // Remove the exit code line itself
+  if(lines.length>0&&/^\[exit \d+\]/.test(lines[0]))lines.shift();
+  // Look for lines with useful content (not just dashes or empty)
+  for(var i=0;i<lines.length;i++){
+    var l=lines[i];
+    if(l.length>10&&!/^[-=]+$/.test(l)&&!/^\[/.test(l)){
+      return l.slice(0,150);
+    }
+  }
+  // Fallback: count issues if present
+  var issueMatch=r.match(/(\d+)\s*(issue|warning|error|fail)/i);
+  if(issueMatch)return issueMatch[0];
+  return lines[0]?.slice(0,150)||'Command failed';
 }
 /* Human-readable tool name labels */
 const _TLBL={audit:'Governance audit',validate:'Consistency check',doctor:'Tool check',
@@ -68,10 +80,12 @@ function addTStart(n,args){
 function addT(n,r,e){
   // Treat [exit N] (non-zero subprocess exit) as an error for expandable display
   if(!e&&r&&/^\[exit [1-9]/.test(r))e=true;
+  // Strip [exit N] prefix — not useful to humans
+  var cleanR=(r||'').replace(/^\[exit \d+\]\n?/,'').trim();
   const lbl=_tname(n);
   const d=document.createElement('div');d.className='tb'+(e?' er':'');
-  if(e&&r&&r.length>80){
-    const summary=extractErrSummary(r);
+  if(e&&cleanR&&cleanR.length>20){
+    const summary=extractErrSummary(cleanR);
     // Add a Report Bug button for Python-level crashes (Traceback, ImportError, etc.)
     const isPyCrash=/Traceback \(most recent call last\)|ImportError|ModuleNotFoundError|AttributeError:|TypeError: |RuntimeError:/i.test(r);
     const rptBtn=isPyCrash
@@ -81,9 +95,9 @@ function addT(n,r,e){
     d.innerHTML=`<div class="thdr">\u274c ${esc(lbl)}</div>
       <details><summary class="tres" style="cursor:pointer;list-style:none">
         ${esc(summary)}<span style="font-size:9px;margin-left:4px;opacity:.6">(click for details)</span>
-      </summary><pre class="err-detail" style="margin-top:4px;font-size:10px">${esc(r.slice(0,3000))}${r.length>3000?'\n\u2026(truncated)':''}</pre>${rptBtn}${r.length>3000?'<button class="ab" style="margin-top:4px;font-size:10px;color:var(--dim)" onclick="vscode.postMessage({command:\'viewFull\',text:\''+esc(r.replace(/'/g,"\'").slice(0,50000))+'\'})">' + '\uD83D\uDCC4 View Full</button>':''}</details>`;
+      </summary><pre class="err-detail" style="margin-top:4px;font-size:10px">${esc(cleanR.slice(0,3000))}${cleanR.length>3000?'\n\u2026(truncated)':''}</pre>${rptBtn}${cleanR.length>3000?'<button class="ab" style="margin-top:4px;font-size:10px;color:var(--dim)" onclick="vscode.postMessage({command:\'viewFull\',text:\''+esc(cleanR.replace(/'/g,"\'").slice(0,50000))+'\'})">' + '\uD83D\uDCC4 View Full</button>':''}</details>`;
   }else if(e){
-    d.innerHTML=`<div class="thdr">❌ ${esc(lbl)}</div><div class="tres">${esc((r||'').slice(0,200))}</div>`;
+    d.innerHTML=`<div class="thdr">\u274c ${esc(lbl)}</div><div class="tres">${esc(cleanR.slice(0,200))}</div>`;
   }else{
     // Success: one-line compact pill — no raw dump, just a status tick
     const brief=_toolBrief(n,r||'');
@@ -177,12 +191,15 @@ const ERR_MAP=[
   // Ollama 400
   [/HTTP Error 400|Bad Request/i,           'Ollama 400 — model does not support tool calling. Try a cloud provider (Anthropic/OpenAI) or a newer Ollama model.'],
   // Generic non-zero exit
-  [/\[exit [1-9]/,                          'Command failed — see error detail above'],
+  [/\[exit [1-9]/,                          'Command returned an error \u2014 expand for details'],
 ];
 function smartErr(m){
   for(const[re,msg]of ERR_MAP){if(re.test(m))return{short:msg,long:m}}
-  const lines=m.split('\n').map(l=>l.trim()).filter(Boolean);
-  return lines.length>1?{short:lines[0],long:lines.slice(1).join('\n')}:{short:m,long:''};
+  // Strip [exit N] prefix for cleaner display
+  var clean=(m||'').replace(/^\[exit \d+\]\n?/,'').trim();
+  var lines=clean.split('\n').map(function(l){return l.trim();}).filter(Boolean);
+  if(lines.length>1)return{short:lines[0].slice(0,150),long:clean};
+  return{short:clean||'Unknown error',long:''};
 }
 function addE(m){
   const{short,long}=smartErr(m||'?');

@@ -54,6 +54,7 @@ export class SessionPanel implements vscode.Disposable {
   private _chatStream: fs.WriteStream | undefined;
   private _availableProviders: string[] = ['ollama'];
   private _autoAcceptAll = false;
+  private _pendingProposal = false;
 
   /** Read auto_approve from scaffold.yml (project-level default). */
   private static _readAutoApprove(projectDir: string): boolean {
@@ -232,28 +233,35 @@ export class SessionPanel implements vscode.Disposable {
       if (e.type === 'ready') {
         // Show VCS state banner in chat so user immediately sees what's modified/staged
         void this._showVcsState();
+        // Show thinking indicator during initial startup
+        void this._panel.webview.postMessage({ type: 'system', message: '\u23f3 Starting session\u2026 syncing, loading governance, checking project.' } satisfies SpecsmithEvent);
         // If auto-approve is on, inject a system-level instruction so the agent
         // doesn't waste turns asking for permission.
         if (this._autoAcceptAll) {
-          this._bridge.send('[SYSTEM] AUTO-APPROVE MODE IS ACTIVE. Do not ask the user for permission or confirmation. Proceed directly with all actions. Never say "Would you like" or "Shall I proceed" — just do it.');
+          this._bridge.send('[SYSTEM] AUTO-APPROVE MODE IS ACTIVE. Do not ask the user for permission or confirmation. Proceed directly with all actions. Never say "Would you like" or "Shall I proceed" \u2014 just do it.');
         }
         setTimeout(() => this._bridge.send('start'), 300);
-        // Background governance check — emit system messages for actionable issues
+        // Background governance check \u2014 emit system messages for actionable issues
         setTimeout(() => this._checkGovernance(), 800);
       }
-      // Detect agent proposals and inject accept/reject buttons (host-side detection)
+      // Track if the current turn contains a proposal-like phrase
       if (e.type === 'llm_chunk' && e.text) {
         const t = e.text.toLowerCase();
-        if (t.includes('would you like') || t.includes('shall i proceed') ||
-            t.includes('ready to proceed') || t.includes('do you approve') ||
-            t.includes('would you like me to')) {
-          // If auto-accept is on, immediately send yes (no delay)
-          if (this._autoAcceptAll) {
-            this._bridge.send('yes, proceed');
-            void this._panel.webview.postMessage({ type: 'system', message: '\u2713 Auto-approved' } satisfies SpecsmithEvent);
-          } else {
-            void this._panel.webview.postMessage({ type: 'proposal' } satisfies SpecsmithEvent);
-          }
+        // Only match explicit proposal language, not casual questions
+        if (t.includes('shall i proceed') || t.includes('ready to proceed') ||
+            t.includes('do you approve') || t.includes('shall i apply') ||
+            t.includes('shall i implement') || t.includes('shall i make these changes')) {
+          this._pendingProposal = true;
+        }
+      }
+      // Show proposal buttons AFTER the turn completes (not mid-stream)
+      if (e.type === 'turn_done' && this._pendingProposal) {
+        this._pendingProposal = false;
+        if (this._autoAcceptAll) {
+          this._bridge.send('yes, proceed');
+          void this._panel.webview.postMessage({ type: 'system', message: '\u2713 Auto-approved' } satisfies SpecsmithEvent);
+        } else {
+          void this._panel.webview.postMessage({ type: 'proposal' } satisfies SpecsmithEvent);
         }
       }
       void this._panel.webview.postMessage(e);
