@@ -47,7 +47,7 @@ export function showSettingsPanel(context: vscode.ExtensionContext): void {
 
   _panel = vscode.window.createWebviewPanel(
     'specsmithSettings',
-    '\u2699 specsmith Settings',
+    '\u2699 Global Settings',
     vscode.ViewColumn.Two,
     { enableScripts: true, retainContextWhenHidden: true },
   );
@@ -85,6 +85,7 @@ interface SettingsData {
   venvActive: boolean;
   apiKeys: Array<{ id: string; label: string; hasKey: boolean }>;
   defaultProvider: string;
+  defaultModel: string;
 }
 
 function _loadData(context: vscode.ExtensionContext): SettingsData {
@@ -106,8 +107,9 @@ function _loadData(context: vscode.ExtensionContext): SettingsData {
   const lastCheck = checkMs ? new Date(checkMs).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : null;
   const releaseChannel = vscode.workspace.getConfiguration('specsmith').get<string>('releaseChannel', 'stable');
   const defaultProvider = vscode.workspace.getConfiguration('specsmith').get<string>('defaultProvider', 'ollama');
+  const defaultModel = vscode.workspace.getConfiguration('specsmith').get<string>('defaultModel', '');
   // API key status is loaded async — start with empty, filled by _sendApiKeyStatus()
-  return { installedVersion, availableVersion: avail || null, lastUpdateCheck: lastCheck, releaseChannel, venvVersion, venvActive: venvExists(), apiKeys: [], defaultProvider };
+  return { installedVersion, availableVersion: avail || null, lastUpdateCheck: lastCheck, releaseChannel, venvVersion, venvActive: venvExists(), apiKeys: [], defaultProvider, defaultModel };
 }
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -121,7 +123,7 @@ interface Msg {
     | 'ollamaRemoveModel' | 'ollamaUpdateModel' | 'ollamaUpdateAll'
     | 'checkOllamaVersion' | 'ollamaUpgrade'
     | 'setApiKey' | 'verifyApiKey' | 'getApiKeyStatus' | 'setDefaultProvider'
-    | 'getGpuInfo' | 'setOllamaCtx';
+    | 'getGpuInfo' | 'setOllamaCtx' | 'setDefaultOllamaModel' | 'ollamaPullModel';
   channel?: string;
   modelId?: string;
   provider?: string;
@@ -260,6 +262,20 @@ async function _handleMsg(msg: Msg): Promise<void> {
         const cur = vscode.workspace.getConfiguration('specsmith').get<number>('ollamaContextLength', 0);
         _panel?.webview.postMessage({ type: 'gpuInfo', vram: vram.toFixed(1), rec, currentCtx: cur });
       })();
+      break;
+    }
+
+    case 'setDefaultOllamaModel': {
+      const mdl = msg.value ?? '';
+      void vscode.workspace.getConfiguration('specsmith').update('defaultModel', mdl, vscode.ConfigurationTarget.Global);
+      break;
+    }
+
+    case 'ollamaPullModel': {
+      if (!msg.modelId) { break; }
+      const pullTerm = _getTerminal('specsmith');
+      pullTerm.sendText(`ollama pull "${msg.modelId}"`);
+      pullTerm.show();
       break;
     }
 
@@ -467,16 +483,32 @@ async function _sendOllamaModels(): Promise<void> {
   if (!_panel) { return; }
   try {
     const http = await import('http');
-    const models = await new Promise<Array<{ name: string; size: number; modified_at: string }>>((resolve) => {
-      let data = '';
-      http.get('http://localhost:11434/api/tags', (r) => {
-        r.on('data', (c: Buffer) => { data += c.toString(); });
-        r.on('end', () => { try { const j = JSON.parse(data) as { models?: Array<{ name: string; size: number; modified_at: string }> }; resolve(j.models ?? []); } catch { resolve([]); } });
-      }).on('error', () => resolve([]));
+    const { OllamaManager, OLLAMA_CATALOG, recommendDefaultModel } = await import('./OllamaManager');
+    const [models, vramGb] = await Promise.all([
+      new Promise<Array<{ name: string; size: number; modified_at: string; digest?: string }>>((resolve) => {
+        let data = '';
+        http.get('http://localhost:11434/api/tags', (r) => {
+          r.on('data', (c: Buffer) => { data += c.toString(); });
+          r.on('end', () => { try { const j = JSON.parse(data) as { models?: Array<{ name: string; size: number; modified_at: string; digest?: string }> }; resolve(j.models ?? []); } catch { resolve([]); } });
+        }).on('error', () => resolve([]));
+      }),
+      OllamaManager.getVramGb(),
+    ]);
+    const installedIds = new Set(models.map((m) => m.name));
+    const recommended = recommendDefaultModel(vramGb);
+    const budget = vramGb > 0 ? vramGb * 0.9 : 999;
+    const catalog = OLLAMA_CATALOG.map((c) => ({
+      id: c.id, name: c.name, sizeGb: c.sizeGb, vramGb: c.vramGb,
+      tier: c.tier, bestFor: c.bestFor.join(', '), notes: c.notes, ctxK: c.ctxK,
+      installed: installedIds.has(c.id),
+      fits: c.vramGb <= budget,
+      recommended: c.id === recommended,
+    }));
+    _panel.webview.postMessage({
+      type: 'ollamaModels', models, catalog, vramGb, recommended,
     });
-    _panel.webview.postMessage({ type: 'ollamaModels', models });
   } catch {
-    _panel.webview.postMessage({ type: 'ollamaModels', models: [] });
+    _panel.webview.postMessage({ type: 'ollamaModels', models: [], catalog: [], vramGb: 0, recommended: '' });
   }
 }
 
@@ -531,7 +563,6 @@ function _shellPath(): string | undefined {
 // ── HTML ──────────────────────────────────────────────────────────────────────
 
 function _html(data: SettingsData): string {
-  const INST_VER = JSON.stringify(data.installedVersion ?? '');
   const activeChannel = data.releaseChannel ?? 'stable';
   const upd = data.availableVersion && data.installedVersion
     && _cmpVer(data.availableVersion, data.installedVersion) > 0;
@@ -541,7 +572,7 @@ function _html(data: SettingsData): string {
 <html lang="en"><head>
 <meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';">
-<title>specsmith Settings</title>
+<title>Global Settings</title>
 <style>
   :root{--bg:var(--vscode-editor-background);--fg:var(--vscode-editor-foreground);
     --sf:var(--vscode-panel-background,#1e1e2e);--br:var(--vscode-panel-border,#313244);
@@ -596,7 +627,7 @@ function _html(data: SettingsData): string {
 </style></head>
 <body>
 <div class="topbar">
-  <span class="title">\u2699 specsmith Settings</span>
+  <span class="title">\u2699 Global Settings</span>
   <button class="btn-sm" onclick="refresh()">&#x21BA; Refresh</button>
 </div>
 <!-- Persistent restart banner — shown after env operations instead of a dismissible popup -->
@@ -651,7 +682,7 @@ function _html(data: SettingsData): string {
 <div class="btn-row">
   <button class="btn" id="chk-btn" onclick="chkVer()">&#x1f50d; Check for Updates</button>
   ${upd ? '<button class="btn btn-upd" onclick="installUpd()">\u2b06 Install Update</button>' : ''}
-  ${data.venvActive && !upd ? '<button class="btn-sm" onclick="updateVenv()">\u2b06 Update to Latest</button>' : ''}
+  ${upd && data.venvActive ? '<button class="btn-sm" onclick="updateVenv()">\u2b06 Update to Latest</button>' : ''}
 </div>
 <h3>\uD83D\uDD11 API Keys</h3>
 <div class="info-box" style="font-size:10px">Keys are stored in your OS credential store (Windows Credential Manager / macOS Keychain). Never written to settings.json.</div>
@@ -682,17 +713,21 @@ function _html(data: SettingsData): string {
 </div>
 <div class="btn-row">
   <button class="btn" id="ollama-chk-btn" onclick="chkOllama()">&#x1f50d; Check Ollama</button>
-  <button class="btn-sm" onclick="ollamaUpgrade()">\u2b06 Upgrade Ollama</button>
+  <button class="btn-sm" id="ollama-upg-btn" style="display:none" onclick="ollamaUpgrade()">\u2b06 Upgrade Ollama</button>
 </div>
-<h3>Installed Models</h3>
+<h3>Models</h3>
+<div class="info-box" style="font-size:10px">\u2714 DEFAULT = active model. Click to change. GPU: <span id="gpu-inline">detecting\u2026</span></div>
+<div style="display:flex;gap:4px;margin-bottom:6px">
+  <button class="btn-sm" id="flt-all" onclick="fltMdl('all')" style="border-color:var(--teal);color:var(--teal)">All</button>
+  <button class="btn-sm" id="flt-installed" onclick="fltMdl('installed')">Installed</button>
+  <button class="btn-sm" id="flt-available" onclick="fltMdl('available')">Available</button>
+  <button class="btn-sm" id="flt-rec" onclick="fltMdl('recommended')">\u2B50 Recommended</button>
+</div>
 <div id="ollama-mdl-load" class="dim" style="margin:4px 0">Checking models\u2026</div>
-<table id="ollama-mdl-table" style="display:none;font-size:11px">
-  <thead><tr><td><b>Model</b></td><td class="dim">Size</td><td class="dim">Digest</td><td class="dim">Last pulled</td><td></td></tr></thead>
-  <tbody id="ollama-mdl-body"></tbody>
-</table>
+<div id="ollama-mdl-cards" style="display:none" data-default="${data.defaultModel}" data-filter="all"></div>
 <div class="btn-row">
-  <button class="btn-sm" onclick="loadModels()">&#x21BA; Refresh Models</button>
-  <button class="btn-sm" onclick="vscode.postMessage({command:'ollamaUpdateAll'})">\u2b06 Update All</button>
+  <button class="btn-sm" onclick="loadModels()">&#x21BA; Refresh</button>
+  <button class="btn-sm" id="btn-update-all" style="display:none" onclick="vscode.postMessage({command:'ollamaUpdateAll'})">\u2b06 Update Stale</button>
 </div>
 <h3>Context Window</h3>
 <div class="info-box" style="font-size:10px">Controls how much text the model can process per turn. Auto uses GPU VRAM to select the best size. Larger windows use more VRAM.</div>
@@ -723,9 +758,10 @@ function _html(data: SettingsData): string {
 </div>
 
 </div><!-- scroll -->
+<div id="_data" style="display:none" data-ver="${data.installedVersion ?? ''}"></div>
 <script>
 const vscode=acquireVsCodeApi();
-const INST_VER=${INST_VER};
+var INST_VER=document.getElementById('_data').dataset.ver||'';
 function sw(id){
   ['env','ollama','system'].forEach((t,i)=>{
     document.querySelectorAll('.tab')[i].classList.toggle('active',t===id);
@@ -757,10 +793,10 @@ function getSys(){
   vscode.postMessage({command:'getSysInfo'});
 }
 function loadModels(){
-  const load=document.getElementById('ollama-mdl-load');
-  const tbl=document.getElementById('ollama-mdl-table');
-  load.textContent='Loading\u2026';load.style.display='';
-  if(tbl)tbl.style.display='none';
+  var load=document.getElementById('ollama-mdl-load');
+  var cards=document.getElementById('ollama-mdl-cards');
+  if(load){load.textContent='Loading\u2026';load.style.display='';}
+  if(cards)cards.style.display='none';
   vscode.postMessage({command:'getOllamaModels'});
 }
 function chkOllama(){
@@ -768,6 +804,30 @@ function chkOllama(){
   vscode.postMessage({command:'checkOllamaVersion'});
 }
 function ollamaUpgrade(){vscode.postMessage({command:'ollamaUpgrade'})}
+function setDef(name){
+  vscode.postMessage({command:'setDefaultOllamaModel',value:name});
+  var cards=document.getElementById('ollama-mdl-cards');
+  if(cards)cards.dataset.default=name;
+  loadModels();
+}
+function fltMdl(f){
+  var cards=document.getElementById('ollama-mdl-cards');
+  if(cards)cards.dataset.filter=f;
+  ['all','installed','available','recommended'].forEach(function(id){
+    var b=document.getElementById('flt-'+id);
+    if(b){b.style.borderColor=id===f?'var(--teal)':'';b.style.color=id===f?'var(--teal)':'';}
+  });
+  // re-render with current data
+  var items=cards?cards.querySelectorAll('[data-tier]'):[];
+  items.forEach(function(el){
+    var t=el.dataset.tier||'';
+    var inst=el.dataset.installed==='1';
+    var rec=el.dataset.recommended==='1';
+    var show=f==='all'||(f==='installed'&&inst)||(f==='available'&&!inst)||(f==='recommended'&&rec);
+    el.style.display=show?'':'none';
+  });
+}
+function dlModel(id){vscode.postMessage({command:'ollamaPullModel',modelId:id});}
 window.addEventListener('message',({data})=>{
   if(data.type==='versionInfo'){
     const btn=document.getElementById('chk-btn');
@@ -794,34 +854,69 @@ window.addEventListener('message',({data})=>{
   if(data.type==='sysInfo'){
     const g=document.getElementById('sys-grid');
     const labels={os:'OS',cpu:'CPU',cores:'Cores',ram:'RAM',gpu:'GPU',disk:'Disk'};
-    g.innerHTML=Object.entries(labels).filter(([k])=>data.info[k]).map(([k,l])=>\`<span class="sys-lbl">\${l}</span><span class="sys-val">\${data.info[k]}</span>\`).join('');
+    g.innerHTML=Object.entries(labels).filter(([k])=>data.info[k]).map(([k,l])=>'<span class="sys-lbl">'+l+'</span><span class="sys-val">'+data.info[k]+'</span>').join('');
     document.getElementById('sys-load').style.display='none';g.style.display='grid';
   }
   if(data.type==='ollamaModels'){
-    const tbody=document.getElementById('ollama-mdl-body');
-    const load=document.getElementById('ollama-mdl-load');
-    const tbl=document.getElementById('ollama-mdl-table');
-    const now=Date.now();
-    const STALE_MS=30*24*60*60*1000; // 30 days
-    tbody.innerHTML=(data.models||[]).map(m=>{
-      const gb=(m.size>0?(m.size/1073741824).toFixed(1)+'GB':'');
-      const mod=(m.modified_at||'').slice(0,10);
-      const modMs=m.modified_at?new Date(m.modified_at).getTime():0;
-      const stale=modMs>0&&(now-modMs)>STALE_MS;
-      const dateStyle=stale?'color:var(--amb);font-weight:600':'color:var(--dim)';
-      const staleTag=stale?' \u26a0':'';  // ⚠ indicator
-      var dg=(m.digest||'').slice(0,12);
-      return \`<tr><td>\${m.name}</td><td class="dim">\${gb}</td>
-        <td class="dim" style="font-family:var(--mn);font-size:9px">\${dg}</td>
-        <td style="\${dateStyle}">\${mod}\${staleTag}</td>
-        <td style="display:flex;gap:3px">
-          <button class="tb" onclick="vscode.postMessage({command:'ollamaUpdateModel',modelId:'\${m.name}'})">\u2b06 Update</button>
-          <button class="tb tb-red" onclick="vscode.postMessage({command:'ollamaRemoveModel',modelId:'\${m.name}'})">\u2717 Remove</button>
-        </td></tr>\`;
-    }).join('');
-    load.style.display=data.models&&data.models.length?'none':'';
-    tbl.style.display=data.models&&data.models.length?'':'none';
-    if(!data.models||!data.models.length){load.textContent='No Ollama models installed';}
+    var cards=document.getElementById('ollama-mdl-cards');
+    var load=document.getElementById('ollama-mdl-load');
+    var now=Date.now();
+    var STALE_MS=30*24*60*60*1000;
+    var savedDef=cards?.dataset?.default||'';
+    var curFilter=cards?.dataset?.filter||'all';
+    var hasStale=false;
+    var gpuInline=document.getElementById('gpu-inline');
+    if(gpuInline)gpuInline.textContent=data.vramGb>0?data.vramGb.toFixed(1)+' GB VRAM':'CPU only (no GPU)';
+    var catalog=(data.catalog||[]).slice();
+    /* Sort: default first, then installed by name, then fits-GPU by name, then needs-VRAM by name */
+    catalog.sort(function(a,b){
+      if(a.id===savedDef) return -1;
+      if(b.id===savedDef) return 1;
+      if(a.installed!==b.installed) return a.installed?-1:1;
+      if(a.fits!==b.fits) return a.fits?-1:1;
+      return a.name.localeCompare(b.name);
+    });
+    if(cards&&catalog.length){
+      cards.innerHTML=catalog.map(function(c){
+        var inst=c.installed;
+        var rec=c.recommended;
+        var fits=c.fits;
+        var isDef=c.id===savedDef;
+        var show=curFilter==='all'||(curFilter==='installed'&&inst)||(curFilter==='available'&&!inst)||(curFilter==='recommended'&&rec);
+        var defStyle=isDef?'background:var(--teal);color:#000;font-size:9px;font-weight:700;border-radius:3px;padding:1px 5px;cursor:default':'background:none;border:1px solid var(--br);color:var(--dim);font-size:9px;border-radius:3px;padding:1px 5px;cursor:pointer';
+        var defLabel=isDef?'\u2714 DEFAULT':'set default';
+        var borderLeft=inst?'border-left:3px solid var(--grn)':(fits?'border-left:3px solid var(--br)':'border-left:3px solid var(--red)');
+        var recBadge=rec?'<span style="background:rgba(78,201,176,.2);color:var(--teal);border-radius:8px;padding:0 5px;font-size:9px;font-weight:700;margin-left:4px">RECOMMENDED</span>':'';
+        var instBadge=inst?'<span style="color:var(--grn);font-size:9px;font-weight:700">\u2713 INSTALLED</span>':'<span style="color:var(--dim);font-size:9px">not installed</span>';
+        var sizeInfo=c.sizeGb+'GB \u00b7 '+c.vramGb+'GB VRAM \u00b7 '+c.ctxK+'K ctx';
+        var actionBtn=inst
+          ?'<button class="tb tb-red" onclick="vscode.postMessage({command:&#39;ollamaRemoveModel&#39;,modelId:&#39;'+c.id+'&#39;})" title="Remove" style="white-space:nowrap">\u2717 Remove</button>'
+          :(fits
+            ?'<button class="tb" style="border-color:var(--teal);color:var(--teal);white-space:nowrap" onclick="dlModel(&#39;'+c.id+'&#39;)" title="Download">\u2B07 Pull</button>'
+            :'<span class="dim" style="font-size:9px;white-space:nowrap">needs more VRAM</span>');
+        return '<div data-tier="'+c.tier+'" data-installed="'+(inst?'1':'0')+'" data-recommended="'+(rec?'1':'0')+'" style="display:'+(show?'flex':'none')+';align-items:center;gap:8px;padding:6px 8px;'+borderLeft+';border-bottom:1px solid var(--br)">' +
+          '<div style="flex:1;min-width:0">' +
+            '<div style="display:flex;align-items:center;gap:6px"><span style="font-weight:600;font-size:12px">'+c.name+'</span>'+recBadge+(inst?'<span style="'+defStyle+'" onclick="setDef(&#39;'+c.id+'&#39;)">'+defLabel+'</span>':'')+'</div>' +
+            '<div style="font-size:10px;color:var(--dim)">'+sizeInfo+' \u00b7 '+c.bestFor+'</div>' +
+            '<div style="font-size:10px;color:var(--dim)">'+c.notes+' \u00b7 '+instBadge+'</div>' +
+          '</div>' +
+          '<div style="flex-shrink:0;min-width:70px;text-align:right">'+actionBtn+'</div>' +
+        '</div>';
+      }).join('');
+      cards.style.display='';
+      load.style.display='none';
+    }else if(data.models&&data.models.length){
+      // Fallback: just show installed models if no catalog
+      cards.innerHTML=data.models.map(function(m){return '<div style="padding:4px 8px;border-bottom:1px solid var(--br)">'+m.name+'</div>';}).join('');
+      cards.style.display='';
+      load.style.display='none';
+    }else{
+      if(cards)cards.style.display='none';
+      load.textContent='Ollama not running or no models available';
+      load.style.display='';
+    }
+    var uab=document.getElementById('btn-update-all');
+    if(uab)uab.style.display=(data.models||[]).some(function(m){var ms=m.modified_at?new Date(m.modified_at).getTime():0;return ms>0&&(now-ms)>STALE_MS;})?'':'none';
   }
   if(data.type==='gpuInfo'){
     var ge=document.getElementById('ollama-gpu');
@@ -834,19 +929,21 @@ window.addEventListener('message',({data})=>{
   if(data.type==='ollamaVersionInfo'){
     document.getElementById('ollama-chk-btn').textContent='\uD83D\uDD0D Check Ollama';
     document.getElementById('ollama-ver').textContent=data.installed||'(not running)';
-    document.getElementById('ollama-latest').textContent=data.latest?(data.installed&&data.latest!==data.installed?data.latest+' \u2190 update available':data.latest+' \u2713 up to date'):'(could not check)';
+    var ollamaUpd=data.latest&&data.installed&&data.latest!==data.installed;
+    document.getElementById('ollama-latest').textContent=data.latest?(ollamaUpd?data.latest+' \u2190 update available':data.latest+' \u2713 up to date'):'(could not check)';
+    var upgBtn=document.getElementById('ollama-upg-btn');
+    if(upgBtn)upgBtn.style.display=ollamaUpd?'':'none';
   }
   if(data.type==='apiKeyStatus'){
     const tbody=document.getElementById('api-key-body');
     if(tbody&&data.keys){
-      tbody.innerHTML=data.keys.map(k=>{
-        const icon=k.hasKey?'<span style="color:var(--grn);font-weight:700">\u2713</span>':'<span style="color:var(--dim)">\u2014</span>';
-        const label=k.hasKey?'set':'not set';
-        return \`<tr><td>\${k.label}</td><td>\${icon} \${label}</td>
-          <td style="display:flex;gap:3px">
-            <button class="tb" onclick="setKey('\${k.id}')">\${k.hasKey?'\u270E Edit':'\uD83D\uDD11 Set'}</button>
-            \${k.hasKey?\`<button class="tb" id="vk-\${k.id}" onclick="verKey(this,'\${k.id}')">\u2705 Verify</button>\`:''}
-          </td></tr>\`;
+      tbody.innerHTML=data.keys.map(function(k){
+        var icon=k.hasKey?'<span style="color:var(--grn);font-weight:700">\u2713</span>':'<span style="color:var(--dim)">\u2014</span>';
+        var lbl2=k.hasKey?'set':'not set';
+        var setBtn='<button class="tb" onclick="setKey(&#39;'+k.id+'&#39;)">'+( k.hasKey?'\u270E Edit':'\uD83D\uDD11 Set')+'</button>';
+        var verBtn=k.hasKey?'<button class="tb" id="vk-'+k.id+'" onclick="verKey(this,&#39;'+k.id+'&#39;)">\u2705 Verify</button>':'';
+        return '<tr><td>'+k.label+'</td><td>'+icon+' '+lbl2+'</td>'+
+          '<td style="display:flex;gap:3px">'+setBtn+verBtn+'</td></tr>';
       }).join('');
     }
   }

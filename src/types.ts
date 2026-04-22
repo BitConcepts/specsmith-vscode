@@ -107,7 +107,8 @@ export interface WebviewMessage {
     | 'reportIssue'      // webview → host: user wants to file an issue/suggestion
     | 'installOrUpgrade'  // webview → host: user wants to install/upgrade specsmith
     | 'changeProject'     // webview → host: user wants to switch project directory
-    | 'setAutoAccept';    // webview → host: user clicked Accept All
+    | 'setAutoAccept'     // webview → host: user clicked Accept All
+    | 'viewFull';         // webview → host: open full text in read-only editor
   text?: string;
   provider?: string;
   model?: string;

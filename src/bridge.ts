@@ -126,7 +126,7 @@ export function findSpecsmith(configured: string, envPath: string): string {
   return configured; // fallback — will fail with a useful error
 }
 
-const TURN_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes per turn
+const TURN_TIMEOUT_MS = 15 * 60 * 1000; // 15 min: Ollama model load + inference + tool calls
 
 export class SpecsmithBridge {
   private _proc: cp.ChildProcess | null = null;
@@ -382,15 +382,32 @@ export class SpecsmithBridge {
     }
   }
 
+  private _warnTimer: ReturnType<typeof setTimeout> | undefined;
+
   private _startTurnTimer(): void {
     this._clearTurnTimer();
+    // Warn at 5 minutes (agent is still working — don't kill)
+    this._warnTimer = setTimeout(() => {
+      this._emit({
+        type: 'system',
+        message: '\u23F3 Agent is still working (5+ min). Ollama may be loading the model or running a complex task. Please wait...',
+      });
+    }, 5 * 60 * 1000);
+    // Kill only at 15 minutes (hard ceiling)
     this._turnTimer = setTimeout(() => {
-      this._emit({ type: 'error', message: 'Agent turn timed out after 5 minutes.' });
+      this._emit({
+        type: 'error',
+        message: 'Agent turn timed out after 15 minutes. The model may be too large or Ollama may be unresponsive. Try a smaller model or restart Ollama.',
+      });
       this.kill();
     }, TURN_TIMEOUT_MS);
   }
 
   private _clearTurnTimer(): void {
+    if (this._warnTimer !== undefined) {
+      clearTimeout(this._warnTimer);
+      this._warnTimer = undefined;
+    }
     if (this._turnTimer !== undefined) {
       clearTimeout(this._turnTimer);
       this._turnTimer = undefined;

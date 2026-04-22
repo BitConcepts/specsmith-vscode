@@ -55,9 +55,10 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     onSessionStatusChange((_panel: SessionPanel, status: SessionStatus) => {
       sessionTree.refresh();
-      // Close both panels when the last session is disposed
+      projectTree.refresh(); // update active indicator
+      // Close Settings when last session closes, but keep GovernancePanel open
+      // (it's project-level, not session-level)
       if (status === 'inactive' && SessionPanel.all().length === 0) {
-        closeGovernancePanel();
         closeSettingsPanel();
       }
     }),
@@ -94,15 +95,10 @@ export function activate(context: vscode.ExtensionContext): void {
 
     await SessionPanel.create(context, projectDir, provider, d.model);
     sessionTree.refresh();
+    projectTree.refresh();
     projectTree.addProject(projectDir);
-    // Open global Settings + Project Settings alongside the session
+    // Open global Settings alongside the session
     showSettingsPanel(context);
-    showGovernancePanel(
-      context,
-      projectDir,
-      (text) => SessionPanel.current()?.sendCommand(text),
-      async () => { await openSession(projectDir); },
-    );
   }
 
   // ── Commands: Sessions ───────────────────────────────────────────────────
@@ -461,7 +457,7 @@ export function activate(context: vscode.ExtensionContext): void {
       const candidates = ['scaffold.yml', 'scaffold.yaml', '.specsmith/config.yml'];
       const found = candidates.map((c) => path.join(projectDir, c)).find(fs.existsSync);
       if (found) {
-        await vscode.window.showTextDocument(vscode.Uri.file(found));
+        await vscode.window.showTextDocument(vscode.Uri.file(found), { viewColumn: vscode.ViewColumn.One });
       } else {
         void vscode.window.showWarningMessage('scaffold.yml not found. Run specsmith init first.');
       }
@@ -787,19 +783,24 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('specsmith.showGovernance', () => {
-      const session    = SessionPanel.current();
-      const projectDir = session?.projectDir
+    vscode.commands.registerCommand('specsmith.showGovernance', (item?: ProjectItem) => {
+      // Accept project dir from tree item click, current session, or workspace
+      const projectDir = item?.fsPath
+        ?? SessionPanel.current()?.projectDir
         ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
       if (!projectDir) {
-        void vscode.window.showWarningMessage('specsmith: open a session or workspace first.');
+        void vscode.window.showWarningMessage('specsmith: add a project folder first.');
         return;
       }
       showGovernancePanel(
         context,
         projectDir,
-        // sendToSession: uses current session or last opened
-        (text) => { SessionPanel.current()?.sendCommand(text); },
+        // sendToSession: uses current session if one exists for this project
+        (text) => {
+          const s = SessionPanel.all().find(p => p.projectDir === projectDir)
+            ?? SessionPanel.current();
+          s?.sendCommand(text);
+        },
         // openSession: auto-creates a session for this project
         async () => { await openSession(projectDir); },
       );

@@ -18,8 +18,8 @@ import { getVenvSpecsmith } from './VenvManager';
 let _panel: vscode.WebviewPanel | undefined;
 let _ctx: vscode.ExtensionContext | undefined;
 let _projectDir: string | undefined;
-let _sendFn: ((t: string) => void) | undefined;
-let _openFn: (() => Promise<void>) | undefined;
+let _sendFn: ((t: string) => void) | null = null;
+let _openFn: (() => Promise<void>) | null = null;
 
 // Augmented process env with Python Scripts dirs prepended — fixes version
 // detection when VS Code extension host PATH doesn't include pipx/pip bins.
@@ -30,7 +30,7 @@ function _getSpecsmithTerminal(): vscode.Terminal {
   const existing = vscode.window.terminals.find(t => t.name === 'specsmith');
   if (existing) { existing.show(); return existing; }
   const shellPath = process.platform === 'win32' ? 'powershell.exe' : process.env.SHELL;
-  const term = _getSpecsmithTerminal();
+  const term = vscode.window.createTerminal({ name: 'specsmith', shellPath });
   term.show();
   return term;
 }
@@ -43,23 +43,25 @@ export function closeGovernancePanel(): void {
 export function showGovernancePanel(
   context: vscode.ExtensionContext,
   projectDir: string,
-  sendToSession: (text: string) => void,
-  openSession: () => Promise<void>,
+  sendToSession?: (text: string) => void,
+  openSession?: () => Promise<void>,
 ): void {
   _ctx        = context;
   _projectDir = projectDir;
-  _sendFn     = sendToSession;
-  _openFn     = openSession;
+  _sendFn     = sendToSession ?? null;
+  _openFn     = openSession ?? null;
 
   if (_panel) {
+    _panel.title = `\u2699 Project Settings (${path.basename(projectDir)})`;
     _panel.reveal(vscode.ViewColumn.Two);
     _reload();
     return;
   }
 
+  const projName = path.basename(projectDir);
   _panel = vscode.window.createWebviewPanel(
     'specsmithGovernance',
-    '\u2699 Project Settings',
+    `\u2699 Project Settings (${projName})`,
     vscode.ViewColumn.Two,
     { enableScripts: true, retainContextWhenHidden: true },
   );
@@ -112,11 +114,16 @@ interface GovMsg {
   command:
     | 'saveScaffold' | 'runCommand' | 'sendToAgent' | 'openFile' | 'refresh'
     | 'addFile' | 'detectLanguages' | 'phaseNext' | 'phaseSet' | 'scanProject'
-    | 'saveExecution' | 'scanTools' | 'toolInstall' | 'detectTools' | 'detectDisciplines';
+    | 'saveExecution' | 'scanTools' | 'toolInstall' | 'detectTools' | 'detectDisciplines'
+    | 'reportIssue' | 'agentTask' | 'saveAgentConfig' | 'loadAgentModels';
   scaffold?: ScaffoldData; cmd?: string; prompt?: string; file?: string; addType?: string;
   phaseKey?: string;
   profileName?: string; customAllowed?: string; customBlocked?: string; customBlockedTools?: string;
+  autoApprove?: boolean;
   toolKey?: string;
+  agentSub?: string;
+  agentProvider?: string; agentModel?: string; agentPrimary?: string;
+  agentUtility?: string; agentCtx?: string; agentIter?: string;
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -364,7 +371,7 @@ function _loadProjectData(projectDir: string, context: vscode.ExtensionContext):
 // ── Message handler ────────────────────────────────────────────────────────────
 
 async function _handleMsg(msg: GovMsg): Promise<void> {
-  if (!_ctx || !_projectDir || !_sendFn || !_openFn) { return; }
+  if (!_ctx || !_projectDir) { return; }
 
   switch (msg.command) {
     case 'saveScaffold':
@@ -374,15 +381,26 @@ async function _handleMsg(msg: GovMsg): Promise<void> {
     case 'runCommand': {
       const exec = _specsmithExec();
       const term = _getSpecsmithTerminal();
-      term.sendText(`${_execCall(exec)} ${msg.cmd} --project-dir "${_projectDir}"`);
+      // Some subcommands (tools install, export) don't accept --project-dir
+      const NO_PROJECT_DIR = /^(tools install|export)\b/;
+      const projFlag = NO_PROJECT_DIR.test(msg.cmd ?? '') ? '' : ` --project-dir "${_projectDir}"`;
+      term.sendText(`${_execCall(exec)} ${msg.cmd}${projFlag}`);
       term.show();
       break;
     }
 
     case 'sendToAgent': {
       if (!msg.prompt) { break; }
+      if (!_sendFn) {
+        // No session — run command in terminal instead
+        const exec = _specsmithExec();
+        const term = _getSpecsmithTerminal();
+        term.sendText(`${_execCall(exec)} run --project-dir "${_projectDir}"`);
+        term.show();
+        break;
+      }
       const { SessionPanel } = await import('./SessionPanel');
-      if (!SessionPanel.current()) {
+      if (!SessionPanel.current() && _openFn) {
         await _openFn();
         await new Promise((r) => setTimeout(r, 2000));
       }
@@ -393,7 +411,9 @@ async function _handleMsg(msg: GovMsg): Promise<void> {
     case 'openFile':
       if (msg.file) {
         const fp = path.join(_projectDir, msg.file);
-        if (fs.existsSync(fp)) { void vscode.window.showTextDocument(vscode.Uri.file(fp)); }
+        if (fs.existsSync(fp)) {
+          void vscode.window.showTextDocument(vscode.Uri.file(fp), { viewColumn: vscode.ViewColumn.One });
+        }
       }
       break;
 
@@ -416,7 +436,7 @@ async function _handleMsg(msg: GovMsg): Promise<void> {
 
     case 'saveExecution': {
       if (!msg.profileName) { break; }
-      _saveExecutionSettings(_projectDir, msg.profileName, msg.customAllowed ?? '', msg.customBlocked ?? '', msg.customBlockedTools ?? '');
+      _saveExecutionSettings(_projectDir, msg.profileName, msg.customAllowed ?? '', msg.customBlocked ?? '', msg.customBlockedTools ?? '', msg.autoApprove ?? false);
       break;
     }
 
@@ -442,8 +462,73 @@ async function _handleMsg(msg: GovMsg): Promise<void> {
       if (!msg.toolKey) { break; }
       const exec5 = _specsmithExec();
       const term5 = vscode.window.createTerminal({ name: `install ${msg.toolKey}`, cwd: _projectDir });
-      term5.sendText(`${_execCall(exec5)} tools install "${msg.toolKey}"`);
+      term5.sendText(`${_execCall(exec5)} tools install "${msg.toolKey}" -y`);
       term5.show();
+      break;
+    }
+
+    case 'reportIssue':
+      void vscode.commands.executeCommand('specsmith.reportIssue');
+      break;
+
+    case 'loadAgentModels': {
+      // Load installed Ollama models for the Agent tab dropdown
+      void (async () => {
+        try {
+          const { OllamaManager } = await import('./OllamaManager');
+          const ids = await OllamaManager.getInstalledIds();
+          _panel?.webview.postMessage({ type: 'agentModels', models: ids });
+        } catch {
+          _panel?.webview.postMessage({ type: 'agentModels', models: [] });
+        }
+      })();
+      break;
+    }
+
+    case 'saveAgentConfig': {
+      // Save agent settings to scaffold.yml under agents: key
+      const scaffoldPath = path.join(_projectDir, 'scaffold.yml');
+      try {
+        let raw = fs.existsSync(scaffoldPath)
+          ? fs.readFileSync(scaffoldPath, 'utf8') : '';
+        // Remove existing agent_ and agents_ keys
+        raw = raw.replace(
+          /^(agent_provider|agent_model|agent_num_ctx|agents_primary_model|agents_utility_model|agents_max_iterations):.*\n?/gm,
+          '',
+        );
+        // Append new values (only non-empty)
+        const lines: string[] = [];
+        if (msg.agentProvider) { lines.push(`agent_provider: ${msg.agentProvider}`); }
+        if (msg.agentModel) { lines.push(`agent_model: ${msg.agentModel}`); }
+        if (msg.agentCtx && msg.agentCtx !== '0') { lines.push(`agent_num_ctx: ${msg.agentCtx}`); }
+        if (msg.agentIter) { lines.push(`agents_max_iterations: ${msg.agentIter}`); }
+        if (lines.length > 0) {
+          raw = raw.trimEnd() + '\n' + lines.join('\n') + '\n';
+        }
+        fs.writeFileSync(scaffoldPath, raw, 'utf8');
+        void vscode.window.showInformationMessage('Agent config saved to scaffold.yml');
+      } catch (e) {
+        void vscode.window.showWarningMessage(`Failed to save agent config: ${e}`);
+      }
+      break;
+    }
+
+    case 'agentTask': {
+      const sub = msg.agentSub ?? 'run';
+      const task = await vscode.window.showInputBox({
+        prompt: `Enter task for specsmith agent ${sub}`,
+        placeHolder: 'e.g. add test coverage for agents/config.py',
+        ignoreFocusOut: true,
+      });
+      if (!task) { break; }
+      const exec6 = _specsmithExec();
+      const term6 = _getSpecsmithTerminal();
+      term6.sendText(
+        _execCall(exec6) + ' agent ' + sub
+        + ' "' + task.replace(/"/g, '\\"') + '"'
+        + ' --project-dir "' + _projectDir + '"'
+      );
+      term6.show();
       break;
     }
 
@@ -585,11 +670,13 @@ function _saveExecutionSettings(
   customAllowed: string,
   customBlocked: string,
   customBlockedTools: string,
+  autoApprove = false,
 ): void {
   const p = path.join(projectDir, 'scaffold.yml');
   if (!fs.existsSync(p)) { void vscode.window.showWarningMessage('scaffold.yml not found'); return; }
   let lines = fs.readFileSync(p, 'utf8').split('\n');
   if (profileName) { lines = _replaceYamlSection(lines, 'execution_profile', profileName); }
+  lines = _replaceYamlSection(lines, 'auto_approve', autoApprove ? 'true' : 'false');
   const toList = (s: string) => s.split(/[,\n]/).map(x => x.trim()).filter(Boolean);
   const allowed = toList(customAllowed);
   const blocked = toList(customBlocked);
@@ -871,12 +958,18 @@ function _html(data: ProjectData): string {
     `<input type="checkbox" name="aux_disc" value="${d.value}"${selAux.includes(d.value) ? ' checked' : ''}> ${d.label}</label>`
   ).join('');
 
-  const fileRows = data.govFiles.map(f => f.exists
-    ? `<tr><td class="ok">✓</td><td>${f.label}</td><td class="dim">${f.lines} lines</td>` +
-      `<td><button class="tb" onclick="openFile('${f.rel}')">Open</button></td></tr>`
-    : `<tr><td class="miss">✗</td><td class="dim">${f.label}</td><td class="dim">—</td>` +
-      `<td><button class="add-btn" onclick="addFile('${f.addCmd ?? f.rel}')">${f.addCmd === 'rename' ? 'Rename' : 'Add'}</button></td></tr>`
-  ).join('');
+  const fileRows = data.govFiles.map(f => {
+    const shortName = f.rel.split('/').pop() || f.label;
+    return f.exists
+      ? `<tr><td class="ok">✓</td><td title="${f.rel}">${shortName}</td><td class="dim">${f.lines} lines</td>` +
+        `<td><button class="tb" onclick="openFile('${f.rel}')">Open</button></td></tr>`
+      : `<tr><td class="miss">✗</td><td class="dim" title="${f.rel}">${shortName}</td><td class="dim">—</td>` +
+        `<td><button class="add-btn" onclick="addFile('${f.addCmd ?? f.rel}')">${f.addCmd === 'rename' ? 'Rename' : 'Add'}</button></td></tr>`;
+  }).join('');
+
+  // Pre-compute global defaults for Agent tab (avoid esbuild mangling in template)
+  const _globalProvider = vscode.workspace.getConfiguration('specsmith').get<string>('defaultProvider', 'ollama');
+  const _globalModel = vscode.workspace.getConfiguration('specsmith').get<string>('defaultModel', '') || 'auto';
 
   // Build phase-aware prompt HTML (must be done outside the template literal)
   const _guidedLabel = (() => { const c = PHASE_CATALOG[data.phase.key]; return c ? c.emoji + ' ' + c.label : data.phase.label; })();
@@ -978,16 +1071,16 @@ function _html(data: ProjectData): string {
               font-size:11px;font-weight:700;color:var(--teal);white-space:nowrap}
   .phase-desc{font-size:10px;color:var(--dim);flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .phase-prog{font-size:10px;color:var(--dim);white-space:nowrap}
-  .phase-sel{background:none;border:1px solid var(--br);border-radius:3px;color:var(--dim);
-             font-size:10px;padding:1px 4px;cursor:pointer}
+  .phase-sel{background:var(--ib);color:var(--if);border:1px solid var(--br);border-radius:3px;
+             font-size:10px;padding:2px 6px;cursor:pointer;font-family:var(--fn)}
   .phase-sel:hover{border-color:var(--teal);color:var(--teal)}
+  .phase-sel option{background:var(--sf);color:var(--fg)}
 </style></head>
 <body>
 <div class="topbar">
     <span class="title">⚙ Project Settings</span>
   <div style="display:flex;gap:5px">
-    <button class="btn-sm" title="Reload panel" onclick="refresh()">↺ Refresh</button>
-    <button class="btn-sm" title="Start agent session" onclick="sendToAgent('Run the session start protocol: sync, load AGENTS.md, check LEDGER.md.')">🤖 Agent</button>
+    <button class="btn-sm" title="Reload panel" onclick="refresh()">\u21BA Refresh</button>
   </div>
 </div>
 ${(() => {
@@ -1011,6 +1104,7 @@ ${(() => {
   <button class="tab" onclick="sw('files')">&#x1f4cb; Files</button>
   <button class="tab" onclick="sw('actions')">&#x26a1; Actions</button>
   <button class="tab" onclick="sw('execution')">&#x1f6e1; Execution</button>
+  <button class="tab" onclick="sw('agent')">&#x1f916; Agent</button>
 </div>
 <div class="scroll">
 
@@ -1091,6 +1185,14 @@ Profile is stored in <b>scaffold.yml</b> as <code>execution_profile</code>.</div
   <select id="exec-profile" onchange="execProfileChanged()">${profileOpts}</select>
 </div>
 <div id="exec-profile-desc" class="info-box" style="font-size:11px;margin-top:4px">${EXEC_PROFILES.find(p=>p.value===execProfile)?.desc??''}</div>
+<h3>Agent Behaviour</h3>
+<div class="fg" style="margin-bottom:8px">
+  <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+    <input type="checkbox" id="exec-auto-approve"${(s as Record<string,unknown>).auto_approve ? ' checked' : ''}>
+    <span>Auto-approve agent actions</span>
+  </label>
+  <div class="dim" style="font-size:10px;margin-top:2px">When enabled, the agent proceeds without asking permission. Saved to scaffold.yml.</div>
+</div>
 <h3>Custom Overrides</h3>
 <div class="fg"><label class="fl">Additional allowed command prefixes (one per line or comma-separated)</label>
   <textarea id="exec-allowed" rows="3" style="width:100%;background:var(--ib);color:var(--if);border:1px solid var(--br);border-radius:4px;padding:4px 7px;font-size:11px;font-family:var(--fn);resize:vertical">${joinOrEmpty(s.custom_allowed_commands)}</textarea>
@@ -1121,6 +1223,16 @@ Profile is stored in <b>scaffold.yml</b> as <code>execution_profile</code>.</div
 
 <!-- Actions tab -->
 <div id="t-actions" class="tab-pane">
+<h3>AG2 Agent Shell</h3>
+<div class="info-box" style="font-size:11px">Local AI agent (Planner/Builder/Verifier) powered by AG2 + Ollama. Requires: <code>pip install ag2[ollama]</code></div>
+<div class="qa">
+  <button class="qa-btn" onclick="runCmd('agent status')">\uD83D\uDCE1 Agent Status</button>
+  <button class="qa-btn" onclick="runCmd('agent reports')">\uD83D\uDCCB Agent Reports</button>
+  <button class="qa-btn" onclick="runCmd('agent verify')">\u2705 Agent Verify</button>
+  <button class="qa-btn" onclick="agentTask('plan')">\uD83D\uDCDD Agent Plan</button>
+  <button class="qa-btn" onclick="agentTask('run')">\u25B6 Agent Run</button>
+  <button class="qa-btn" onclick="agentTask('improve')">\uD83D\uDD27 Agent Improve</button>
+</div>
 <h3>Quick Actions</h3>
 <div class="qa">
   <button class="qa-btn" onclick="runCmd('audit --fix')">🔍 audit --fix</button>
@@ -1133,7 +1245,7 @@ Profile is stored in <b>scaffold.yml</b> as <code>execution_profile</code>.</div
   <button class="qa-btn" onclick="runCmd('req gaps')">⚠ req gaps</button>
   <button class="qa-btn" onclick="runCmd('tools scan --fpga')">🔧 tools scan</button>
   <button class="qa-btn" onclick="runCmd('phase show')">\uD83D\uDCCA Lifecycle Status</button>
-  <button class="qa-btn" onclick="sendToAgent('I want to report a bug or issue. Look at recent session errors. Help me write a clear bug report and file it to GitHub Issues.')">\uD83D\uDC1B Report Bug</button>
+  <button class="qa-btn" onclick="vscode.postMessage({command:'reportIssue'})">\uD83D\uDC1B Report Bug</button>
 </div>
 <h3>\uD83E\uDD16 AI-Guided (${_guidedLabel})</h3>
 ${_guidedBtn}
@@ -1142,18 +1254,75 @@ ${_phasePromptsHtml}
 <h3>Always Available</h3>
 ${_alwaysPromptsHtml}
 </div>
-</div><!-- scroll -->
 
+<!-- Agent tab -->
+<div id="t-agent" class="tab-pane">
+<h3>Project Agent Configuration</h3>
+<div class="info-box" style="font-size:10px">Per-project overrides. Empty = use global default (<b>${_globalProvider}</b> / <b>${_globalModel}</b>). Saved to <code>scaffold.yml</code>.</div>
+<div class="row">
+  <div class="fg"><label class="fl">Provider</label>
+    <select id="ag-provider">
+      <option value="">(global: ${_globalProvider})</option>
+      <option value="ollama"${(s as Record<string,any>).agent_provider === 'ollama' ? ' selected' : ''}>Ollama (local)</option>
+      <option value="anthropic"${(s as Record<string,any>).agent_provider === 'anthropic' ? ' selected' : ''}>Anthropic</option>
+      <option value="openai"${(s as Record<string,any>).agent_provider === 'openai' ? ' selected' : ''}>OpenAI</option>
+      <option value="gemini"${(s as Record<string,any>).agent_provider === 'gemini' ? ' selected' : ''}>Gemini</option>
+    </select>
+  </div>
+  <div class="fg"><label class="fl">Model</label>
+    <select id="ag-model">
+      <option value="">(global: ${_globalModel})</option>
+    </select>
+    <div class="dim" style="font-size:9px;margin-top:2px">Models load from Ollama when tab opens</div>
+  </div>
+</div>
+<div class="fg"><label class="fl">Context Length</label>
+  <select id="ag-ctx">
+    <option value="0"${!(s as Record<string,any>).agent_num_ctx ? ' selected' : ''}>Auto (detect from GPU)</option>
+    <option value="4096"${(s as Record<string,any>).agent_num_ctx === '4096' ? ' selected' : ''}>4K tokens</option>
+    <option value="8192"${(s as Record<string,any>).agent_num_ctx === '8192' ? ' selected' : ''}>8K tokens</option>
+    <option value="16384"${(s as Record<string,any>).agent_num_ctx === '16384' ? ' selected' : ''}>16K tokens</option>
+    <option value="32768"${(s as Record<string,any>).agent_num_ctx === '32768' ? ' selected' : ''}>32K tokens</option>
+    <option value="65536"${(s as Record<string,any>).agent_num_ctx === '65536' ? ' selected' : ''}>64K tokens</option>
+  </select>
+</div>
+<h3>Tool Call Limit</h3>
+<div class="info-box" style="font-size:10px">Max tool calls per agent turn. Prevents infinite loops. Set to 0 for unlimited (stops only at context window).</div>
+<div class="fg">
+  <select id="ag-iter">
+    <option value="10"${(s as Record<string,any>).agents_max_iterations === '10' || !(s as Record<string,any>).agents_max_iterations ? ' selected' : ''}>10 (safe default)</option>
+    <option value="20"${(s as Record<string,any>).agents_max_iterations === '20' ? ' selected' : ''}>20 (recommended)</option>
+    <option value="50"${(s as Record<string,any>).agents_max_iterations === '50' ? ' selected' : ''}>50 (complex tasks)</option>
+    <option value="0"${(s as Record<string,any>).agents_max_iterations === '0' ? ' selected' : ''}>Unlimited (until context full)</option>
+  </select>
+</div>
+<div class="btn-row">
+  <button class="btn" onclick="saveAgent()">\uD83D\uDCBE Save</button>
+</div>
+</div>
+
+</div><!-- scroll -->
+<script type="application/json" id="_langs">${JSON.stringify(LANGUAGES)}</script>
+<script type="application/json" id="_fpga">${JSON.stringify(FPGA_TOOLS)}</script>
 <script>
-const vscode=acquireVsCodeApi();
-const LANGUAGES=${JSON.stringify(LANGUAGES)};
-const FPGA_TOOLS=${JSON.stringify(FPGA_TOOLS)};
+var vscode=acquireVsCodeApi();
+var LANGUAGES=JSON.parse(document.getElementById('_langs').textContent||'[]');
+var FPGA_TOOLS=JSON.parse(document.getElementById('_fpga').textContent||'[]');
 
 function sw(id){
-  const tabs=['project','tools','files','actions','execution'];
-  document.querySelectorAll('.tab').forEach((t,i)=>t.classList.toggle('active',tabs[i]===id));
-  document.querySelectorAll('.tab-pane').forEach(p=>p.classList.toggle('active',p.id==='t-'+id));
+  var tabs=['project','tools','files','actions','execution','agent'];
+  document.querySelectorAll('.tab').forEach(function(t,i){t.classList.toggle('active',tabs[i]===id);});
+  document.querySelectorAll('.tab-pane').forEach(function(p){p.classList.toggle('active',p.id==='t-'+id);});
   if(id==='execution')scanToolsNow();
+  if(id==='agent')vscode.postMessage({command:'loadAgentModels'});
+}
+function saveAgent(){
+  vscode.postMessage({command:'saveAgentConfig',
+    agentProvider:document.getElementById('ag-provider').value,
+    agentModel:document.getElementById('ag-model').value,
+    agentCtx:document.getElementById('ag-ctx').value,
+    agentIter:document.getElementById('ag-iter').value,
+  });
 }
 function execProfileChanged(){
   const sel=document.getElementById('exec-profile');
@@ -1168,6 +1337,7 @@ function saveExec(){
     customAllowed:document.getElementById('exec-allowed').value,
     customBlocked:document.getElementById('exec-blocked').value,
     customBlockedTools:document.getElementById('exec-blocked-tools').value,
+    autoApprove:document.getElementById('exec-auto-approve').checked,
   });
 }
 function scanToolsNow(){
@@ -1207,6 +1377,7 @@ function save(){
   }});
 }
 function scanProj(){vscode.postMessage({command:'scanProject'})}
+function agentTask(sub){vscode.postMessage({command:'agentTask',agentSub:sub})}
 function filt(inp,name){
   const q=inp.value.toLowerCase();
   document.querySelectorAll('input[name='+name+']').forEach(cb=>{
@@ -1226,12 +1397,12 @@ window.addEventListener('message',({data})=>{
     if(!tbody||!tbl||!load)return;
     const tools=data.tools||[];
     if(!tools.length){load.textContent='No tools found — does scaffold.yml exist?';load.style.display='';return;}
-    tbody.innerHTML=tools.map(t=>{
-      const ok=t.installed;
-      const icon=ok?'<span class="ok">\u2713</span>':'<span class="miss">\u2717</span>';
-      const ver=t.version?\`<span class="dim">\${t.version}</span>\`:'<span class="dim">—</span>';
-      const btn=ok?'':\`<button class="tb" onclick="installTool('\${t.name}')">Install</button>\`;
-      return \`<tr><td>\${icon}</td><td>\${t.name}</td><td class="dim">\${t.category}</td><td>\${ver}</td><td>\${btn}</td></tr>\`;
+    tbody.innerHTML=tools.map(function(t){
+      var ok=t.installed;
+      var icon=ok?'<span class="ok">\u2713</span>':'<span class="miss">\u2717</span>';
+      var ver=t.version?'<span class="dim">'+t.version+'</span>':'<span class="dim">\u2014</span>';
+      var btn=ok?'':'<button class="tb" onclick="installTool(&#39;'+t.name+'&#39;)">Install</button>';
+      return '<tr><td>'+icon+'</td><td>'+t.name+'</td><td class="dim">'+t.category+'</td><td>'+ver+'</td><td>'+btn+'</td></tr>';
     }).join('');
     load.style.display='none';
     tbl.style.display='';
@@ -1287,6 +1458,21 @@ window.addEventListener('message',({data})=>{
       document.querySelectorAll('input[name=aux_disc]').forEach(cb=>{
         cb.checked=r.auxiliary_disciplines.includes(cb.value);
         cb.closest('.chip')?.classList.toggle('sel',cb.checked);
+      });
+    }
+  }
+  if(data.type==='agentModels'){
+    var sel=document.getElementById('ag-model');
+    if(sel){
+      var cur=sel.value||'';
+      var first=sel.options[0];
+      sel.innerHTML='';
+      if(first)sel.appendChild(first);
+      (data.models||[]).forEach(function(m){
+        var o=document.createElement('option');
+        o.value=m;o.textContent=m;
+        if(m===cur)o.selected=true;
+        sel.appendChild(o);
       });
     }
   }

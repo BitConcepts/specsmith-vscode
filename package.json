@@ -2,7 +2,7 @@
   "name": "specsmith-vscode",
   "displayName": "specsmith - AEE Workbench",
   "description": "Applied Epistemic Engineering workbench. 6-tab Settings panel, AI agent sessions, execution profiles, FPGA/HDL tool support, Ollama local LLMs, and tool installer.",
-  "version": "0.3.13",
+  "version": "0.3.14",
   "publisher": "BitConcepts",
   "license": "MIT",
   "engines": {
@@ -267,17 +267,7 @@
           "group": "navigation"
         },
         {
-          "command": "specsmith.showGovernance",
-          "when": "view == specsmith.sessions",
-          "group": "navigation"
-        },
-        {
           "command": "specsmith.showSettings",
-          "when": "view == specsmith.projects",
-          "group": "navigation"
-        },
-        {
-          "command": "specsmith.showGovernance",
           "when": "view == specsmith.projects",
           "group": "navigation"
         },
@@ -496,12 +486,17 @@
     "build": "node esbuild.mjs",
     "watch": "node esbuild.mjs --watch",
     "package": "npm run build && vsce package",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "test": "mocha"
   },
   "devDependencies": {
+    "@types/mocha": "^10.0.10",
     "@types/node": "^25.5.2",
     "@types/vscode": "^1.85.0",
+    "@vscode/test-electron": "^2.5.2",
     "esbuild": "^0.28.0",
+    "mocha": "^11.7.5",
+    "ts-node": "^10.9.2",
     "typescript": "^6.0.2"
   }
 }
