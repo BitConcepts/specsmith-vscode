@@ -20,7 +20,8 @@ import { augmentedEnv, findSpecsmith } from './bridge';
 import {
   getGlobalVenvDir, venvExists, getVenvSpecsmith,
   getVenvSpecsmithVersion, buildCreateVenvSteps, buildUpdateSteps, deleteVenvDir,
-  watchVersionMarker, writeVersionMarker,
+  watchVersionMarker, writeVersionMarker, invalidateVersionMarker, getVenvPython,
+  cleanPipTempDirs,
   type SpawnCmd,
 } from './VenvManager';
 
@@ -188,9 +189,12 @@ async function _handleMsg(msg: Msg): Promise<void> {
       const ch = vscode.workspace.getConfiguration('specsmith').get<string>('releaseChannel', 'stable') as 'stable' | 'pre-release';
       const steps = buildUpdateSteps(ch);
       if (!steps.length) { break; }
+      // Clean up corrupted pip temp dirs + invalidate stale marker
+      cleanPipTempDirs();
+      invalidateVersionMarker();
       void (async () => {
         const ok = await _runSteps(steps, `Install specsmith (${ch})`);
-        // Update version marker and notify webview
+        // Read version via Python import (not marker, which we just invalidated)
         const newVer = getVenvSpecsmithVersion();
         if (newVer) { writeVersionMarker(newVer); }
         _panel?.webview.postMessage({ type: 'installDone', version: newVer ?? '', ok });

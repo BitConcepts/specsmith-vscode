@@ -105,24 +105,47 @@ export function getVenvPython(): string | null {
 }
 
 /** Return the specsmith version installed in the venv, or null.
- *  Prefers the fast marker file; falls back to spawning specsmith --version. */
+ *  Prefers the fast marker file; falls back to Python import. */
 export function getVenvSpecsmithVersion(): string | null {
   // Fast path: read marker file (no process spawn)
   const marker = readVersionMarker();
   if (marker) { return marker; }
-  // Slow path: spawn specsmith --version
-  const binary = getVenvSpecsmith();
-  if (!binary) { return null; }
+  // Slow path: use venv Python to import specsmith and read __version__.
+  // This is more reliable than `specsmith --version` because it doesn't
+  // depend on the script shebang (which breaks if the base Python moves).
+  const py = getVenvPython();
+  if (!py) { return null; }
   try {
-    const r = cp.spawnSync(binary, ['--version'], { timeout: 5000, encoding: 'utf8' });
+    const r = cp.spawnSync(py, ['-c', 'import specsmith; print(specsmith.__version__)'], { timeout: 5000, encoding: 'utf8' });
     if (r.status === 0) {
-      const m = (r.stdout ?? '').match(/(\d+\.\d+\.\d+(?:\.dev\d+|a\d+|b\d+|rc\d+)?)/);
-      const ver = m?.[1] ?? null;
-      if (ver) { writeVersionMarker(ver); } // seed the marker for next time
-      return ver;
+      const ver = (r.stdout ?? '').trim();
+      if (ver) { writeVersionMarker(ver); }
+      return ver || null;
     }
   } catch { /* ignore */ }
   return null;
+}
+
+/** Invalidate the marker file so the next read falls through to a live check. */
+export function invalidateVersionMarker(): void {
+  try { fs.unlinkSync(_versionMarkerPath()); } catch { /* ignore */ }
+}
+
+/** Clean up corrupted pip temp directories (~ prefixed) in site-packages.
+ *  These are created when pip is interrupted mid-install and cause
+ *  'Ignoring invalid distribution' warnings on every pip operation. */
+export function cleanPipTempDirs(): void {
+  const sitePackages = process.platform === 'win32'
+    ? path.join(getGlobalVenvDir(), 'Lib', 'site-packages')
+    : path.join(getGlobalVenvDir(), 'lib', `python${process.version.slice(0, 4)}`, 'site-packages');
+  try {
+    if (!fs.existsSync(sitePackages)) { return; }
+    for (const entry of fs.readdirSync(sitePackages, { withFileTypes: true })) {
+      if (entry.isDirectory() && entry.name.startsWith('~')) {
+        fs.rmSync(path.join(sitePackages, entry.name), { recursive: true, force: true });
+      }
+    }
+  } catch { /* ignore */ }
 }
 
 /** A platform-agnostic command: executable path + argument list. */
