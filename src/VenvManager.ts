@@ -113,9 +113,12 @@ export function buildUpdateVenvCommand(channel: 'stable' | 'pre-release'): strin
   const pip = process.platform === 'win32'
     ? `& "${path.join(venvPath, 'Scripts', 'pip.exe')}"`
     : `"${path.join(venvPath, 'bin', 'pip')}"`;
+  // Stable: --force-reinstall is needed to downgrade from a pre-release
+  // (pip considers 0.3.13.dev213 > 0.3.10 and won't downgrade with just --upgrade).
+  // --no-deps avoids slow reinstall of all dependencies.
   return channel === 'pre-release'
     ? `${pip} install --upgrade --pre specsmith`
-    : `${pip} install --upgrade specsmith`;
+    : `${pip} install --force-reinstall --no-deps specsmith && ${pip} install specsmith`;
 }
 
 /** Build terminal commands to delete the global venv. */

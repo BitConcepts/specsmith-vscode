@@ -151,16 +151,28 @@ async function _handleMsg(msg: Msg): Promise<void> {
       const term = _getTerminal("specsmith");
       term.sendText(buildUpdateVenvCommand(ch));
       term.show();
-      // Poll venv version every 3s — when it changes, the install is done
+      // Poll venv version every 3s — when it changes, the install is done.
+      // Also use a 30s fallback for cases where pip finishes without changing
+      // the version (e.g. already up-to-date or force-reinstall to same version).
+      let done = false;
+      const finish = (ver: string) => {
+        if (done) { return; }
+        done = true;
+        clearInterval(poll);
+        clearTimeout(fallback);
+        _panel?.webview.postMessage({ type: 'installDone', version: ver });
+      };
       const poll = setInterval(() => {
         const newVer = getVenvSpecsmithVersion();
-        if (newVer && newVer !== oldVer) {
-          clearInterval(poll);
-          _panel?.webview.postMessage({ type: 'installDone', version: newVer });
-        }
+        if (newVer && newVer !== oldVer) { finish(newVer); }
       }, 3000);
-      // Safety: stop polling after 5 minutes
-      setTimeout(() => clearInterval(poll), 5 * 60 * 1000);
+      // Fallback: after 30s, check once more then finish regardless
+      const fallback = setTimeout(() => {
+        const finalVer = getVenvSpecsmithVersion() ?? oldVer;
+        finish(finalVer);
+      }, 30_000);
+      // Safety ceiling
+      setTimeout(() => { if (!done) { finish(oldVer); } }, 5 * 60 * 1000);
       break;
     }
 
