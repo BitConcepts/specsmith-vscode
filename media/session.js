@@ -464,6 +464,22 @@ window.addEventListener('message',({data})=>{switch(data.type){
       }
       i.focus();
     }break;
+  case 'governance_fix':{
+    // Show Fix / Skip buttons for governance issues
+    var gd=document.createElement('div');
+    gd.style.cssText='display:flex;gap:6px;padding:6px 8px;margin:2px 0;align-self:flex-start;background:var(--sf);border:1px solid var(--br);border-radius:6px;align-items:center';
+    gd.innerHTML='<span style="font-size:11px;color:var(--amb)">Auto-fix governance issues?</span>';
+    var fb=document.createElement('button');
+    fb.textContent='\u2713 Fix Now';
+    fb.style.cssText='background:var(--bb);color:var(--bf);border:none;border-radius:4px;padding:3px 10px;cursor:pointer;font-size:11px;font-weight:600';
+    fb.onclick=function(){gd.remove();setBusy(true);vscode.postMessage({command:'send',text:'Run specsmith audit --fix to repair all governance issues. Then report what was fixed.'});};
+    var sb=document.createElement('button');
+    sb.textContent='Skip';
+    sb.style.cssText='background:none;border:1px solid var(--br);color:var(--dim);border-radius:4px;padding:3px 10px;cursor:pointer;font-size:11px';
+    sb.onclick=function(){gd.remove();};
+    gd.appendChild(fb);gd.appendChild(sb);
+    C.appendChild(gd);sb2();
+    break;}
   case 'proposal':{
     proposalCount++;
     // Remove any existing proposal buttons first

@@ -246,17 +246,11 @@ export class SessionPanel implements vscode.Disposable {
       }
       // Auto-run start protocol when agent becomes ready
       if (e.type === 'ready') {
-        // Show VCS state banner in chat so user immediately sees what's modified/staged
         void this._showVcsState();
-        // Show thinking indicator during initial startup
-        void this._panel.webview.postMessage({ type: 'system', message: '\u23f3 Starting session\u2026 syncing, loading governance, checking project.' } satisfies SpecsmithEvent);
-        // If auto-approve is on, inject a system-level instruction so the agent
-        // doesn't waste turns asking for permission.
         if (this._autoAcceptAll) {
-          this._bridge.send('[SYSTEM] AUTO-APPROVE MODE IS ACTIVE. Do not ask the user for permission or confirmation. Proceed directly with all actions. Never say "Would you like" or "Shall I proceed" \u2014 just do it.');
+          this._bridge.send('[SYSTEM] AUTO-APPROVE MODE IS ACTIVE. Proceed directly with all actions.');
         }
         setTimeout(() => this._bridge.send('start'), 300);
-        // Background governance check \u2014 emit system messages for actionable issues
         setTimeout(() => this._checkGovernance(), 800);
       }
       // Track if the current turn contains a proposal-like phrase
@@ -641,12 +635,11 @@ export class SessionPanel implements vscode.Disposable {
       }
 
       if (issues.length === 0) {
-        emit('\u2713 Governance check passed \u2014 all key files present');
+        emit('\u2713 Governance OK');
         return;
       }
-
-      // Report issues but do NOT auto-fix via agent (was causing 2+ min startup delays)
-      emit(`\u26a0 ${issues.length} governance issue(s):\n${issues.map(i => `  \u2022 ${i}`).join('\n')}\nUse the \uD83D\uDD0D audit button to fix.`);
+      emit(`\u26a0 ${issues.length} issue(s): ${issues.join(', ')}`);
+      void this._panel.webview.postMessage({ type: 'governance_fix', issues } satisfies SpecsmithEvent);
     } catch { /* ignore \u2014 non-blocking */ }
   }
 
@@ -697,19 +690,12 @@ export class SessionPanel implements vscode.Disposable {
       void this._panel.webview.postMessage({
         type: 'vcs_state',
         branch: branch || '(detached)',
-        changes: statusText === '(clean — no uncommitted changes)' ? 0 : changeCount,
+        changes: statusText === '(clean \u2014 no uncommitted changes)' ? 0 : changeCount,
         additions,
         deletions,
         projectDir: dir,
       } satisfies SpecsmithEvent);
-
-      // Format as a compact, readable snapshot
-      const lines: string[] = [
-        `📁 Project: ${dir}`,
-        `🔀 ${branch || '(detached HEAD)'}${changeCount > 0 ? ` · ${changeCount} change(s)` : ' · clean'}`,
-        `🗃 Recent: ${logText.split('\n').join(' │ ')}`,
-      ];
-      emit(lines.join('\n'));
+      // VCS bar shows all this info \u2014 no chat message needed
     } catch { /* not a git repo or git not installed — silently skip */ }
   }
 

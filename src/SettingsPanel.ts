@@ -48,11 +48,16 @@ async function _runSteps(steps: SpawnCmd[], label: string): Promise<boolean> {
   for (const step of steps) {
     out.appendLine(`> ${step.exe} ${step.args.join(' ')}`);
     const ok = await new Promise<boolean>((resolve) => {
-      const proc = cp.spawn(step.exe, step.args, { stdio: ['ignore', 'pipe', 'pipe'] });
-      proc.stdout?.on('data', (d: Buffer) => out.append(d.toString()));
-      proc.stderr?.on('data', (d: Buffer) => out.append(d.toString()));
-      proc.on('error', (err) => { out.appendLine(`Error: ${err.message}`); resolve(false); });
-      proc.on('close', (code) => resolve(code === 0));
+      try {
+        const proc = cp.spawn(step.exe, step.args, { stdio: ['ignore', 'pipe', 'pipe'] });
+        proc.stdout?.on('data', (d: Buffer) => out.append(d.toString()));
+        proc.stderr?.on('data', (d: Buffer) => out.append(d.toString()));
+        proc.on('error', (err) => { out.appendLine(`Error: ${err.message}`); resolve(false); });
+        proc.on('close', (code) => resolve(code === 0));
+      } catch (err) {
+        out.appendLine(`Spawn failed: ${err instanceof Error ? err.message : String(err)}`);
+        resolve(false);
+      }
     });
     if (!ok) {
       out.appendLine(`❌ Step failed. See output above.`);
@@ -401,20 +406,13 @@ async function _handleMsg(msg: Msg): Promise<void> {
     }
 
     case 'ollamaUpgrade': {
-      // Platform-specific Ollama installer via CLI (cross-platform)
-      const ollamaSteps: SpawnCmd[] = [];
-      if (process.platform === 'win32') {
-        // Windows: PowerShell one-liner installer
-        ollamaSteps.push({ exe: 'powershell', args: ['-NoProfile', '-Command', 'irm https://ollama.com/install.ps1 | iex'] });
-      } else {
-        // macOS + Linux: shell installer
-        ollamaSteps.push({ exe: 'sh', args: ['-c', 'curl -fsSL https://ollama.com/install.sh | sh'] });
-      }
-      void (async () => {
-        await _runSteps(ollamaSteps, 'Upgrade Ollama');
-        // Re-check version after upgrade and update banner
-        void _checkOllamaVersion();
-      })();
+      // Open download page — AV-safe (PowerShell installer scripts trigger AMSI).
+      // On Linux, the curl|sh approach also requires sudo which cp.spawn can't provide.
+      void vscode.env.openExternal(vscode.Uri.parse('https://ollama.com/download'));
+      void vscode.window.showInformationMessage(
+        'Download and install the latest Ollama from ollama.com/download. Click Check when done.',
+        'Check Now',
+      ).then((a) => { if (a === 'Check Now') { void _checkOllamaVersion(); } });
       break;
     }
   }
@@ -742,10 +740,11 @@ function _html(data: SettingsData): string {
 <div class="ver-grid">
   <span class="ver-lbl">Installed</span><span class="ver-val" id="ollama-ver">&mdash;</span>
   <span class="ver-lbl">Available</span><span class="ver-val" id="ollama-latest">&mdash;</span>
+  <span class="ver-lbl">Last check</span><span class="dim" id="ollama-last-check">checking\u2026</span>
 </div>
 <div class="btn-row">
-  <button class="btn" id="ollama-chk-btn" onclick="chkOllama()">&#x1f50d; Check Ollama</button>
-  <button class="btn-sm" id="ollama-upg-btn" style="display:none" onclick="ollamaUpgrade()">\u2b06 Upgrade Ollama</button>
+  <button class="btn" id="ollama-chk-btn" onclick="chkOllama()">&#x1f50d; Check for Updates</button>
+  <button class="btn btn-upd" id="ollama-upg-btn" style="display:none" onclick="ollamaUpgrade()">\u2b06 Install Update</button>
 </div>
 <h3>Models</h3>
 <div class="info-box" style="font-size:10px">\u2714 DEFAULT = active model. Click to change. GPU: <span id="gpu-inline">detecting\u2026</span></div>
@@ -979,10 +978,15 @@ window.addEventListener('message',({data})=>{
     if(cs&&data.currentCtx!==undefined)cs.value=String(data.currentCtx);
   }
   if(data.type==='ollamaVersionInfo'){
-    document.getElementById('ollama-chk-btn').textContent='\uD83D\uDD0D Check Ollama';
-    document.getElementById('ollama-ver').textContent=data.installed||'(not running)';
+    var oChk=document.getElementById('ollama-chk-btn');
+    if(oChk){oChk.textContent='\uD83D\uDD0D Check for Updates';oChk.disabled=false;}
+    var ov=document.getElementById('ollama-ver');
+    if(ov)ov.textContent=data.installed||'(not running)';
     var ollamaUpd=data.latest&&data.installed&&data.latest!==data.installed;
-    document.getElementById('ollama-latest').textContent=data.latest?(ollamaUpd?data.latest+' \u2190 update available':data.latest+' \u2713 up to date'):'(could not check)';
+    var ol=document.getElementById('ollama-latest');
+    if(ol)ol.textContent=data.latest?(ollamaUpd?data.latest:data.latest+' \u2713 (current)'):'(could not check)';
+    var olc=document.getElementById('ollama-last-check');
+    if(olc)olc.textContent=new Date().toLocaleString([],{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
     var upgBtn=document.getElementById('ollama-upg-btn');
     if(upgBtn)upgBtn.style.display=ollamaUpd?'':'none';
     _updOllama=ollamaUpd?data.latest:null;
