@@ -1019,8 +1019,8 @@ function verKey(btn,prov){btn.textContent='\u23f3\u2026';btn.disabled=true;vscod
 var _updSpecsmith=null,_updOllama=null;
 function _refreshBanner(){
   var items=[];
-  if(_updSpecsmith)items.push('<span style="cursor:pointer;text-decoration:underline" onclick="sw(\'env\')">specsmith '+_updSpecsmith+'</span>');
-  if(_updOllama)items.push('<span style="cursor:pointer;text-decoration:underline" onclick="sw(\'ollama\')">Ollama '+_updOllama+'</span>');
+  if(_updSpecsmith)items.push('<span style="cursor:pointer;text-decoration:underline" onclick="sw(&#39;env&#39;)">specsmith '+_updSpecsmith+'</span>');
+  if(_updOllama)items.push('<span style="cursor:pointer;text-decoration:underline" onclick="sw(&#39;ollama&#39;)">Ollama '+_updOllama+'</span>');
   var banner=document.getElementById('update-banner');
   var span=document.getElementById('upd-items');
   if(banner&&span){

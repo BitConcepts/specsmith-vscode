@@ -645,22 +645,8 @@ export class SessionPanel implements vscode.Disposable {
         return;
       }
 
-      emit(`\u26a0 Found ${issues.length} governance issue(s):\n${issues.map(i => `  \u2022 ${i}`).join('\n')}\n\n\u2699 Auto-fixing\u2026`);
-
-      // Auto-fix via agent
-      setTimeout(() => {
-        this._bridge.send(
-          '[RESPOND IN ENGLISH ONLY] ' +
-          'The governance check found issues. Fix them in this order:\n' +
-          '1. Run specsmith audit --fix to auto-repair what it can\n' +
-          '2. For each remaining issue, fix it directly:\n' +
-          issues.map((iss, i) => `   ${i + 1}. ${iss}`).join('\n') + '\n' +
-          '3. If ARCHITECTURE.md is missing, create a minimal one based on the project structure\n' +
-          '4. If REQUIREMENTS.md is missing, create a minimal one with at least 3 requirements\n' +
-          '5. If TEST_SPEC.md is missing, create it with test cases for the requirements\n' +
-          'Do NOT ask for permission. Fix everything and report what you did.',
-        );
-      }, 1500);
+      // Report issues but do NOT auto-fix via agent (was causing 2+ min startup delays)
+      emit(`\u26a0 ${issues.length} governance issue(s):\n${issues.map(i => `  \u2022 ${i}`).join('\n')}\nUse the \uD83D\uDD0D audit button to fix.`);
     } catch { /* ignore \u2014 non-blocking */ }
   }
 
