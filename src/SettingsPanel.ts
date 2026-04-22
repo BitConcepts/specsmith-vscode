@@ -66,7 +66,12 @@ export function showSettingsPanel(context: vscode.ExtensionContext): void {
     }, 3000);
   }
   _panel.webview.onDidReceiveMessage((msg: Msg) => void _handleMsg(msg), null, context.subscriptions);
-  _panel.onDidDispose(() => { _panel = undefined; _ctx = undefined; }, null, context.subscriptions);
+  // Persist open state so startup can restore it
+  void context.globalState.update('specsmith.settingsPanelOpen', true);
+  _panel.onDidDispose(() => {
+    if (_ctx) { void _ctx.globalState.update('specsmith.settingsPanelOpen', false); }
+    _panel = undefined; _ctx = undefined;
+  }, null, context.subscriptions);
 }
 
 function _reload(): void {

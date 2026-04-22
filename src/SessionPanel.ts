@@ -220,6 +220,15 @@ export class SessionPanel implements vscode.Disposable {
     this._panel.webview.html = this._html();
 
     this._bridge.onEvent((e: SpecsmithEvent) => {
+      // Suppress raw tool-call JSON leaked by the LLM into text output.
+      // Some models emit {"name":"...","arguments":...} as plain text
+      // instead of using the tool-calling API — filter these out.
+      if (e.type === 'llm_chunk' && e.text) {
+        const t = e.text.trim();
+        if (/^\s*\{\s*"name"\s*:.*"arguments"\s*:/.test(t)) {
+          return;
+        }
+      }
       // Log display-only chat history to disk
       const ts = new Date().toISOString();
       if (e.type === 'llm_chunk' && e.text) {

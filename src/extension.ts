@@ -97,8 +97,13 @@ export function activate(context: vscode.ExtensionContext): void {
     sessionTree.refresh();
     projectTree.refresh();
     projectTree.addProject(projectDir);
-    // Open global Settings alongside the session
-    showSettingsPanel(context);
+    // Open project settings alongside the session
+    showGovernancePanel(
+      context,
+      projectDir,
+      (text) => SessionPanel.current()?.sendCommand(text),
+      async () => { await openSession(projectDir); },
+    );
   }
 
   // ── Commands: Sessions ───────────────────────────────────────────────────
@@ -1088,8 +1093,11 @@ async function _autoOpenGovernancePanel(
   // Focus the specsmith sidebar first so the user sees it
   void vscode.commands.executeCommand('workbench.view.extension.specsmith');
 
-  // Global Settings always opens — no project required
-  showSettingsPanel(context);
+  // Global Settings: only restore if it was previously left open
+  const settingsWasOpen = context.globalState.get<boolean>('specsmith.settingsPanelOpen', false);
+  if (settingsWasOpen) {
+    showSettingsPanel(context);
+  }
 
   // Project Settings only when a project folder is available
   const workspaceDir =
