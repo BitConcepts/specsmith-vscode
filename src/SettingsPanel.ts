@@ -792,7 +792,16 @@ function updateVenv(){vscode.postMessage({command:'updateVenv'})}
 function deleteVenv(){vscode.postMessage({command:'deleteVenv'})}
 function rebuildVenv(){vscode.postMessage({command:'rebuildVenv'})}
 function removeOtherInstalls(){vscode.postMessage({command:'removeOtherInstalls'})}
-function saveChannel(ch){vscode.postMessage({command:'setReleaseChannel',channel:ch})}
+function saveChannel(ch){
+  // Trigger check immediately on channel switch
+  var avail=document.getElementById('ver-avail');
+  if(avail)avail.textContent='\u23f3 Checking '+ch+' channel\u2026';
+  // Remove any existing install/restart button
+  var row=document.getElementById('chk-btn')?.closest('.btn-row');
+  var old=row?.querySelector('.btn-upd,.btn-rel');
+  if(old)old.remove();
+  vscode.postMessage({command:'setReleaseChannel',channel:ch});
+}
 function chkVer(){
   const btn=document.getElementById('chk-btn');
   btn.textContent='\u23f3 Checking\u2026';btn.disabled=true;
@@ -857,9 +866,19 @@ window.addEventListener('message',({data})=>{
         function pv(v){const m=v.match(/^(\d+)\.(\d+)\.(\d+)(?:\.(dev)(\d+)|a(\d+)|b(\d+)|rc(\d+))?/);if(!m)return[0,0,0,0];let pre=999999;if(m[4]!==undefined&&m[5]!==undefined)pre=parseInt(m[5])||0;else if(m[6]!==undefined)pre=10000+(parseInt(m[6])||0);else if(m[7]!==undefined)pre=20000+(parseInt(m[7])||0);else if(m[8]!==undefined)pre=30000+(parseInt(m[8])||0);return[parseInt(m[1])||0,parseInt(m[2])||0,parseInt(m[3])||0,pre];}
         const av=pv(a),bv=pv(b);for(let i=0;i<4;i++){if(av[i]>bv[i])return true;if(av[i]<bv[i])return false;}return false;
       }
-      if(installed&&semverGt(data.available,installed)){
+      if(installed&&data.available!==installed){
+        // Different version available — could be upgrade or channel switch
         const row=btn.closest('.btn-row');
-        if(row&&!row.querySelector('.btn-upd')){const upd=document.createElement('button');upd.className='btn btn-upd';upd.textContent='\u2b06 Install Update';upd.onclick=()=>vscode.postMessage({command:'installUpdate'});row.appendChild(upd);}
+        // Remove stale button first
+        const old=row?.querySelector('.btn-upd,.btn-rel');
+        if(old)old.remove();
+        if(row){
+          const isUp=semverGt(data.available,installed);
+          const upd=document.createElement('button');upd.className='btn btn-upd';
+          upd.textContent=isUp?'\u2b06 Install Update':'\u2b06 Install '+data.available;
+          upd.onclick=()=>installUpd();
+          row.appendChild(upd);
+        }
       }else if(installed){document.getElementById('ver-avail').textContent=data.available+' \u2713 (current)';}
     }
   }
