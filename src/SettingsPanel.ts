@@ -170,9 +170,8 @@ async function _handleMsg(msg: Msg): Promise<void> {
 
     case 'setReleaseChannel': {
       if (!msg.channel) { break; }
-      void vscode.workspace.getConfiguration('specsmith').update('releaseChannel', msg.channel, vscode.ConfigurationTarget.Global);
-      // Auto-check and prompt: the webview versionInfo handler will show
-      // the Install Update button if a newer version is found.
+      // Must await — _checkVersion reads the channel from settings
+      await vscode.workspace.getConfiguration('specsmith').update('releaseChannel', msg.channel, vscode.ConfigurationTarget.Global);
       await _checkVersion(_ctx);
       break;
     }
