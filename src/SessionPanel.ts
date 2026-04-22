@@ -792,7 +792,7 @@ export class SessionPanel implements vscode.Disposable {
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy"
-  content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline' ${scriptUri}; img-src data: 'unsafe-inline';">
+  content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline' https://*.vscode-resource.vscode-cdn.net vscode-webview:; img-src data: 'unsafe-inline';">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>specsmith</title>
 <style>
@@ -886,11 +886,11 @@ export class SessionPanel implements vscode.Disposable {
   <span class="bsep">│</span>
   <label for="ps" style="color:var(--dim)">Provider</label>
   <select id="ps">
+    <option value="ollama">ollama</option>
     <option value="anthropic">anthropic</option>
     <option value="openai">openai</option>
     <option value="gemini">gemini</option>
     <option value="mistral">mistral</option>
-    <option value="ollama">ollama</option>
   </select>
   <label for="ms" style="color:var(--dim)">Model</label>
   <select id="ms" style="min-width:148px"></select>
@@ -939,7 +939,7 @@ export class SessionPanel implements vscode.Disposable {
     <span class="kh">Enter sends · Shift+Enter newline</span>
   </div>
 </div>
-<script src="${scriptUri}"></script>
+<script src="` + scriptUri + `"></script>
 </body>
 </html>`;
   }
