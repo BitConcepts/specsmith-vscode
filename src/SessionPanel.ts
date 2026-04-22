@@ -224,14 +224,16 @@ export class SessionPanel implements vscode.Disposable {
     this._panel.webview.html = this._html();
 
     this._bridge.onEvent((e: SpecsmithEvent) => {
-      // Suppress raw tool-call JSON leaked by the LLM into text output.
-      // Some models emit {"name":"...","arguments":...} as plain text
-      // instead of using the tool-calling API — filter these out.
+      // Suppress raw JSON leaked by the LLM into text output.
+      // Local models (Qwen, DeepSeek) often emit tool calls or structured
+      // responses as plain JSON text instead of using the API properly.
       if (e.type === 'llm_chunk' && e.text) {
         const t = e.text.trim();
-        if (/^\s*\{\s*"name"\s*:.*"arguments"\s*:/.test(t)) {
-          return;
-        }
+        // Tool-call JSON: {"name": ..., "arguments": ...}
+        if (/^\s*\{\s*"name"\s*:.*"arguments"\s*:/.test(t)) { return; }
+        // Structured status/action JSON: {"status": ..., "next_steps": ...}
+        if (/^\s*\{[\s\S]*"(?:status|next_steps|action|result|error)"\s*:/.test(t)
+            && t.endsWith('}')) { return; }
       }
       // Log display-only chat history to disk
       const ts = new Date().toISOString();
@@ -260,12 +262,16 @@ export class SessionPanel implements vscode.Disposable {
       // Track if the current turn contains a proposal-like phrase
       if (e.type === 'llm_chunk' && e.text) {
         const t = e.text.toLowerCase();
-        // Match proposal language — both explicit and conversational
+        // Match proposal language — explicit asks, conversational, and action lists
         if (t.includes('shall i proceed') || t.includes('ready to proceed') ||
             t.includes('do you approve') || t.includes('shall i apply') ||
             t.includes('shall i implement') || t.includes('shall i make these changes') ||
             t.includes('would you like to proceed') || t.includes('would you like me to') ||
-            t.includes('want me to go ahead') || t.includes('should i continue')) {
+            t.includes('want me to go ahead') || t.includes('should i continue') ||
+            t.includes('here are the next steps') || t.includes('i recommend') ||
+            t.includes('i suggest') || t.includes('do you want me to') ||
+            t.includes('ready when you are') || t.includes('let me know if') ||
+            t.includes('approve this') || t.includes('confirm to proceed')) {
           this._pendingProposal = true;
         }
       }
@@ -691,11 +697,23 @@ export class SessionPanel implements vscode.Disposable {
       const branch = branchResult.status === 0 ? branchResult.stdout.trim() : '';
       const changeCount = status.stdout.trim().split('\n').filter((l: string) => l.trim()).length;
 
+      // Get additions/deletions from diff
+      let additions = 0, deletions = 0;
+      const diff = cp.spawnSync('git', ['diff', '--numstat'], { cwd: dir, encoding: 'utf8', timeout: 5000 });
+      if (diff.status === 0) {
+        for (const line of diff.stdout.trim().split('\n')) {
+          const [a, d] = line.split('\t');
+          if (a && d && a !== '-') { additions += parseInt(a, 10) || 0; deletions += parseInt(d, 10) || 0; }
+        }
+      }
+
       // Post structured VCS data for the bar
       void this._panel.webview.postMessage({
         type: 'vcs_state',
         branch: branch || '(detached)',
         changes: statusText === '(clean — no uncommitted changes)' ? 0 : changeCount,
+        additions,
+        deletions,
         projectDir: dir,
       } satisfies SpecsmithEvent);
 
@@ -885,11 +903,6 @@ export class SessionPanel implements vscode.Disposable {
   #ibar.da{border-top:2px solid var(--teal);background:rgba(78,201,176,.06)}
   #dh{display:none;text-align:center;color:var(--teal);font-size:11px;padding:2px 0;font-style:italic}
   #ibar.da #dh{display:block}
-  #tmtr{display:flex;align-items:center;gap:8px;padding:3px 10px;background:var(--sf);border-bottom:1px solid var(--br);font-size:11px;color:var(--dim);flex-shrink:0}
-  #ctrk{flex:1;height:4px;background:var(--br);border-radius:2px;overflow:hidden}
-  #cfil{height:100%;width:0%;background:var(--grn);border-radius:2px;transition:width .4s,background .4s}
-  #cpct{min-width:28px;text-align:right}
-  #tcst{color:var(--teal);font-weight:600}
   #obn{display:none;align-items:center;gap:8px;padding:4px 10px;background:rgba(206,145,120,.1);border-top:1px solid var(--amb);font-size:11px;color:var(--amb);flex-shrink:0}
   #obn.show{display:flex}
   #obn button{background:none;border:none;color:var(--amb);cursor:pointer;font-size:13px;margin-left:auto}
@@ -945,13 +958,15 @@ export class SessionPanel implements vscode.Disposable {
 <div id="vcsbar">
   <span>\uD83D\uDD00</span><span class="vb" id="vb">\u2014</span>
   <span id="vchg"></span>
+  <span id="vdiff"></span>
+  <span class="bsep" style="color:var(--br)">\u2502</span>
+  <span style="font-size:9px;color:var(--dim)">ctx</span>
+  <div id="ctrk" style="width:60px;height:4px;background:var(--br);border-radius:2px;overflow:hidden"><div id="cfil" style="height:100%;width:0%;background:var(--grn);border-radius:2px;transition:width .4s,background .4s"></div></div>
+  <span id="cpct" style="font-size:9px;min-width:22px;text-align:right">0%</span>
+  <span id="tcnt" style="font-size:9px;font-family:var(--mn)">0+0</span>
+  <span id="tcst" style="font-size:9px;color:var(--teal);font-weight:600">$0.0000</span>
   <span style="flex:1"></span>
   <span id="vwd" style="font-family:var(--mn);opacity:.7" title=""></span>
-</div>
-<div id="tmtr">
-  <span>Context</span>
-  <div id="ctrk"><div id="cfil"></div></div>
-  <span id="cpct">0%</span><span id="tcnt">0+0</span><span id="tcst">$0.0000</span>
 </div>
 <div id="obn"><span>\u26a0</span><span id="obt">Context high</span>
   <button onclick="document.getElementById('obn').classList.remove('show')">\u2715</button></div>

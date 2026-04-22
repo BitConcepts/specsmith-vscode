@@ -428,9 +428,14 @@ window.addEventListener('message',({data})=>{switch(data.type){
   case 'error':addE(data.message);setBusy(false);break;
   case 'system':addS(data.message||'');break;
   case 'vcs_state':{
-    const vb=document.getElementById('vb'),vc=document.getElementById('vchg'),vw=document.getElementById('vwd');
+    const vb=document.getElementById('vb'),vc=document.getElementById('vchg'),vw=document.getElementById('vwd'),vd=document.getElementById('vdiff');
     if(vb)vb.textContent=data.branch||'\u2014';
     if(vc){const n=data.changes||0;vc.textContent=n>0?n+' change'+(n!==1?'s':''):'clean';vc.className=n>0?'vc':'';}
+    if(vd){
+      const a=data.additions||0,d=data.deletions||0;
+      if(a||d){vd.innerHTML='<span style="color:var(--grn);font-weight:600;font-size:9px">+'+a+'</span> <span style="color:var(--red);font-weight:600;font-size:9px">-'+d+'</span>';}
+      else{vd.textContent='';}
+    }
     if(vw&&data.projectDir){const p=data.projectDir.replace(/\\/g,'/');const short=p.split('/').slice(-2).join('/');vw.textContent=short;vw.title=p;}
     break;}
   case 'clear_display':

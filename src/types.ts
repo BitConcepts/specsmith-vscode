@@ -65,6 +65,8 @@ export interface SpecsmithEvent {
   // vcs_state
   branch?: string;
   changes?: number;
+  additions?: number;
+  deletions?: number;
 
   // tool_crash
   tool?: string;

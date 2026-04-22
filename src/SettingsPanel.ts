@@ -85,25 +85,15 @@ export function showSettingsPanel(context: vscode.ExtensionContext): void {
     _panel?.webview.postMessage({ type: 'installDone', version: newVer });
   });
 
-  // Auto-check for specsmith updates when the panel first opens so the
-  // update badge and version info are current without manual action.
-  // Also auto-check if installed version doesn't match channel expectation
-  // (e.g. .dev installed but channel is stable, or stable installed but channel is pre-release).
+  // Auto-check both specsmith and Ollama versions on every panel open.
+  // Results are sent to the webview which shows an update banner if needed.
   setTimeout(() => {
     if (!_ctx || !_panel) { return; }
     void _checkVersion(_ctx);
     void _sendApiKeyStatus();
+    void _checkOllamaVersion();
+    void _sendOllamaModels();
   }, 2000);
-  // Auto-check Ollama version + model updates on open (respects setting)
-  const autoOllama = vscode.workspace.getConfiguration('specsmith').get<boolean>('checkOllamaOnStart', true);
-  if (autoOllama) {
-    setTimeout(() => {
-      if (_panel) {
-        void _checkOllamaVersion();
-        void _sendOllamaModels();
-      }
-    }, 3000);
-  }
   _panel.webview.onDidReceiveMessage((msg: Msg) => void _handleMsg(msg), null, context.subscriptions);
   // Persist open state so startup can restore it
   void context.globalState.update('specsmith.settingsPanelOpen', true);
@@ -658,7 +648,13 @@ function _html(data: SettingsData): string {
   <span class="title">\u2699 Global Settings</span>
   <button class="btn-sm" onclick="refresh()">&#x21BA; Refresh</button>
 </div>
-<!-- Persistent restart banner — shown after env operations instead of a dismissible popup -->
+<!-- Update banner — shown when specsmith or Ollama updates are available -->
+<div id="update-banner" style="display:none;align-items:center;gap:8px;padding:7px 12px;background:rgba(78,201,176,.1);border-bottom:2px solid var(--teal);font-size:11px;color:var(--teal);flex-shrink:0;flex-wrap:wrap">
+  <span style="font-weight:700">\u2b06 Updates available:</span>
+  <span id="upd-items"></span>
+  <button class="dismiss" style="margin-left:auto;background:none;border:1px solid var(--br);color:var(--dim);border-radius:3px;padding:2px 6px;cursor:pointer;font-size:10px" onclick="document.getElementById('update-banner').style.display='none'">\u2715</button>
+</div>
+<!-- Persistent restart banner — shown after env operations -->
 <div id="restart-banner">
   <span id="restart-msg">✓ Operation complete. Restart VS Code to apply changes.</span>
   <div style="display:flex;gap:6px">
@@ -890,7 +886,12 @@ window.addEventListener('message',({data})=>{
           upd.onclick=()=>installUpd();
           row.appendChild(upd);
         }
-      }else if(installed){document.getElementById('ver-avail').textContent=data.available+' \u2713 (current)';}
+        _updSpecsmith=data.available;
+      }else if(installed){
+        document.getElementById('ver-avail').textContent=data.available+' \u2713 (current)';
+        _updSpecsmith=null;
+      }
+      _refreshBanner();
     }
   }
   if(data.type==='sysInfo'){
@@ -975,6 +976,8 @@ window.addEventListener('message',({data})=>{
     document.getElementById('ollama-latest').textContent=data.latest?(ollamaUpd?data.latest+' \u2190 update available':data.latest+' \u2713 up to date'):'(could not check)';
     var upgBtn=document.getElementById('ollama-upg-btn');
     if(upgBtn)upgBtn.style.display=ollamaUpd?'':'none';
+    _updOllama=ollamaUpd?data.latest:null;
+    _refreshBanner();
   }
   if(data.type==='apiKeyStatus'){
     const tbody=document.getElementById('api-key-body');
@@ -1012,6 +1015,19 @@ window.addEventListener('message',({data})=>{
 });
 function setKey(prov){vscode.postMessage({command:'setApiKey',provider:prov})}
 function verKey(btn,prov){btn.textContent='\u23f3\u2026';btn.disabled=true;vscode.postMessage({command:'verifyApiKey',provider:prov})}
+/* Update banner: tracks both specsmith + Ollama update state */
+var _updSpecsmith=null,_updOllama=null;
+function _refreshBanner(){
+  var items=[];
+  if(_updSpecsmith)items.push('<span style="cursor:pointer;text-decoration:underline" onclick="sw(\'env\')">specsmith '+_updSpecsmith+'</span>');
+  if(_updOllama)items.push('<span style="cursor:pointer;text-decoration:underline" onclick="sw(\'ollama\')">Ollama '+_updOllama+'</span>');
+  var banner=document.getElementById('update-banner');
+  var span=document.getElementById('upd-items');
+  if(banner&&span){
+    if(items.length){span.innerHTML=items.join(' \u00b7 ');banner.style.display='flex';}
+    else{banner.style.display='none';}
+  }
+}
 // Auto-load sys info on open
 getSys();
 vscode.postMessage({command:'getApiKeyStatus'});
