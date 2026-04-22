@@ -20,10 +20,12 @@ import { augmentedEnv, findSpecsmith } from './bridge';
 import {
   getGlobalVenvDir, venvExists, getVenvSpecsmith,
   getVenvSpecsmithVersion, buildCreateVenvCommands, buildUpdateVenvCommand, buildDeleteVenvCommands,
+  watchVersionMarker,
 } from './VenvManager';
 
 let _panel: vscode.WebviewPanel | undefined;
 let _ctx: vscode.ExtensionContext | undefined;
+let _unwatchVersion: (() => void) | undefined;
 
 /** Reuse a single terminal for all specsmith operations to avoid terminal sprawl. */
 function _getTerminal(_name: string): vscode.Terminal {
@@ -52,9 +54,22 @@ export function showSettingsPanel(context: vscode.ExtensionContext): void {
     { enableScripts: true, retainContextWhenHidden: true },
   );
   _reload();
+
+  // Watch the .specsmith-version marker file — fires installDone when pip writes it
+  _unwatchVersion?.();
+  _unwatchVersion = watchVersionMarker((newVer) => {
+    _panel?.webview.postMessage({ type: 'installDone', version: newVer });
+  });
+
   // Auto-check for specsmith updates when the panel first opens so the
   // update badge and version info are current without manual action.
-  setTimeout(() => { if (_ctx && _panel) { void _checkVersion(_ctx); void _sendApiKeyStatus(); } }, 2000);
+  // Also auto-check if installed version doesn't match channel expectation
+  // (e.g. .dev installed but channel is stable, or stable installed but channel is pre-release).
+  setTimeout(() => {
+    if (!_ctx || !_panel) { return; }
+    void _checkVersion(_ctx);
+    void _sendApiKeyStatus();
+  }, 2000);
   // Auto-check Ollama version + model updates on open (respects setting)
   const autoOllama = vscode.workspace.getConfiguration('specsmith').get<boolean>('checkOllamaOnStart', true);
   if (autoOllama) {
@@ -70,6 +85,7 @@ export function showSettingsPanel(context: vscode.ExtensionContext): void {
   void context.globalState.update('specsmith.settingsPanelOpen', true);
   _panel.onDidDispose(() => {
     if (_ctx) { void _ctx.globalState.update('specsmith.settingsPanelOpen', false); }
+    _unwatchVersion?.(); _unwatchVersion = undefined;
     _panel = undefined; _ctx = undefined;
   }, null, context.subscriptions);
 }
@@ -147,32 +163,12 @@ async function _handleMsg(msg: Msg): Promise<void> {
 
     case 'installUpdate': {
       const ch = vscode.workspace.getConfiguration('specsmith').get<string>('releaseChannel', 'stable') as 'stable' | 'pre-release';
-      const oldVer = getVenvSpecsmithVersion() ?? '';
       const term = _getTerminal("specsmith");
       term.sendText(buildUpdateVenvCommand(ch));
       term.show();
-      // Poll venv version every 3s — when it changes, the install is done.
-      // Also use a 30s fallback for cases where pip finishes without changing
-      // the version (e.g. already up-to-date or force-reinstall to same version).
-      let done = false;
-      const finish = (ver: string) => {
-        if (done) { return; }
-        done = true;
-        clearInterval(poll);
-        clearTimeout(fallback);
-        _panel?.webview.postMessage({ type: 'installDone', version: ver });
-      };
-      const poll = setInterval(() => {
-        const newVer = getVenvSpecsmithVersion();
-        if (newVer && newVer !== oldVer) { finish(newVer); }
-      }, 3000);
-      // Fallback: after 30s, check once more then finish regardless
-      const fallback = setTimeout(() => {
-        const finalVer = getVenvSpecsmithVersion() ?? oldVer;
-        finish(finalVer);
-      }, 30_000);
-      // Safety ceiling
-      setTimeout(() => { if (!done) { finish(oldVer); } }, 5 * 60 * 1000);
+      // The pip command writes a .specsmith-version marker file on completion.
+      // The file watcher (started when the panel opens) will detect the change
+      // and send installDone to the webview. No polling needed.
       break;
     }
 
