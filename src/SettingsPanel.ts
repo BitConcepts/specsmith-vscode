@@ -74,7 +74,18 @@ export function closeSettingsPanel(): void { _panel?.dispose(); }
 
 export function showSettingsPanel(context: vscode.ExtensionContext): void {
   _ctx = context;
-  if (_panel) { _panel.reveal(vscode.ViewColumn.Two); _reload(); return; }
+  if (_panel) {
+    _panel.reveal(vscode.ViewColumn.Two);
+    _reload();
+    // Re-check versions on every reveal (not just first create)
+    setTimeout(() => {
+      if (_ctx && _panel) {
+        void _checkVersion(_ctx);
+        void _checkOllamaVersion();
+      }
+    }, 500);
+    return;
+  }
 
   _panel = vscode.window.createWebviewPanel(
     'specsmithSettings',
@@ -514,62 +525,83 @@ async function _sendSysInfo(): Promise<void> {
 async function _upgradeOllama(): Promise<void> {
   const out = _out();
   out.show(true);
-  out.appendLine('── Upgrade Ollama ──');
+  out.appendLine('\u2500\u2500 Upgrade Ollama \u2500\u2500');
 
   if (process.platform === 'win32') {
-    // Windows: download OllamaSetup.exe via Node https, then run /SILENT
-    out.appendLine('Downloading OllamaSetup.exe from GitHub...');
-    const tmpDir = os.tmpdir();
-    const exePath = path.join(tmpDir, 'OllamaSetup.exe');
+    out.appendLine('Downloading OllamaSetup.exe...');
+    const exePath = path.join(os.tmpdir(), 'OllamaSetup.exe');
     try {
-      const fs = await import('fs');
-      const https = await import('https');
-      // Get latest release URL
-      const url = 'https://ollama.com/download/OllamaSetup.exe';
-      await new Promise<void>((resolve, reject) => {
-        const file = fs.createWriteStream(exePath);
-        const req = https.get(url, { timeout: 60000 }, (res) => {
-          // Follow redirects (GitHub/Cloudflare redirects)
-          if (res.statusCode === 301 || res.statusCode === 302) {
-            const loc = res.headers.location;
-            if (loc) {
-              https.get(loc, { timeout: 60000 }, (r2) => {
-                r2.pipe(file);
-                file.on('finish', () => { file.close(); resolve(); });
-              }).on('error', reject);
-              return;
-            }
-          }
-          res.pipe(file);
-          file.on('finish', () => { file.close(); resolve(); });
-        });
-        req.on('error', reject);
-        req.on('timeout', () => { req.destroy(); reject(new Error('Download timed out')); });
+      const fsM = await import('fs');
+      await _downloadFile('https://ollama.com/download/OllamaSetup.exe', exePath, out);
+      out.appendLine('Running installer (silent)...');
+      const ok = await new Promise<boolean>((resolve) => {
+        try {
+          const proc = cp.spawn(exePath, ['/SILENT'], { stdio: ['ignore', 'pipe', 'pipe'] });
+          proc.stdout?.on('data', (d: Buffer) => out.append(d.toString()));
+          proc.stderr?.on('data', (d: Buffer) => out.append(d.toString()));
+          proc.on('error', (err) => { out.appendLine(`Error: ${err.message}`); resolve(false); });
+          proc.on('close', (code) => resolve(code === 0));
+        } catch (err) {
+          out.appendLine(`Spawn failed: ${err instanceof Error ? err.message : String(err)}`);
+          resolve(false);
+        }
       });
-      out.appendLine(`Downloaded to ${exePath}`);
-      out.appendLine('Running OllamaSetup.exe /SILENT ...');
-      await new Promise<boolean>((resolve) => {
-        const proc = cp.spawn(exePath, ['/SILENT'], { stdio: ['ignore', 'pipe', 'pipe'] });
-        proc.stdout?.on('data', (d: Buffer) => out.append(d.toString()));
-        proc.stderr?.on('data', (d: Buffer) => out.append(d.toString()));
-        proc.on('error', (err) => { out.appendLine(`Error: ${err.message}`); resolve(false); });
-        proc.on('close', (code) => { resolve(code === 0); });
-      });
-      // Clean up
-      try { fs.unlinkSync(exePath); } catch { /* ignore */ }
+      try { fsM.unlinkSync(exePath); } catch { /* ignore */ }
+      if (ok) { out.appendLine('\u2713 Ollama upgraded.'); } else { out.appendLine('\u274c Installer failed.'); }
     } catch (err) {
-      out.appendLine(`Failed: ${err instanceof Error ? err.message : String(err)}`);
+      out.appendLine(`Download failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   } else {
-    // Linux/macOS: curl | sh (no AV issues)
     await _runSteps(
       [{ exe: 'sh', args: ['-c', 'curl -fsSL https://ollama.com/install.sh | sh'] }],
       'Upgrade Ollama',
     );
   }
-
-  out.appendLine('\u2713 Ollama upgrade complete. Checking version...');
   void _checkOllamaVersion();
+}
+
+/** Download a URL to a local file, following up to 10 redirects. */
+async function _downloadFile(url: string, dest: string, out: vscode.OutputChannel): Promise<void> {
+  const httpsM = await import('https');
+  const httpM = await import('http');
+  const fsM = await import('fs');
+  let redirects = 0;
+  const MAX = 10;
+
+  return new Promise<void>((resolve, reject) => {
+    const doGet = (u: string) => {
+      const mod = u.startsWith('https') ? httpsM : httpM;
+      const req = mod.get(u, { timeout: 120000 }, (res) => {
+        if ((res.statusCode === 301 || res.statusCode === 302 || res.statusCode === 307) && res.headers.location) {
+          res.destroy();
+          if (++redirects > MAX) { reject(new Error('Too many redirects')); return; }
+          doGet(res.headers.location);
+          return;
+        }
+        if (res.statusCode !== 200) {
+          res.destroy();
+          reject(new Error(`HTTP ${res.statusCode}`));
+          return;
+        }
+        const file = fsM.createWriteStream(dest);
+        const total = parseInt(res.headers['content-length'] ?? '0', 10);
+        let downloaded = 0;
+        res.on('data', (chunk: Buffer) => {
+          downloaded += chunk.length;
+          if (total > 0) {
+            const pct = Math.round(downloaded / total * 100);
+            out.replace(`Downloading... ${pct}% (${(downloaded / 1048576).toFixed(1)} MB)`);
+          }
+        });
+        res.pipe(file);
+        file.on('finish', () => { file.close(); out.appendLine(''); resolve(); });
+        file.on('error', reject);
+      });
+      req.on('error', reject);
+      req.on('timeout', () => { req.destroy(); reject(new Error('Download timed out')); });
+    };
+    doGet(url);
+  });
 }
 
 // ── Ollama models ───────────────────────────────────────────────────────────────
