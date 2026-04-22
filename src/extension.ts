@@ -20,6 +20,7 @@ import { OllamaManager, TASK_SUGGESTIONS } from './OllamaManager';
 import { SessionStatus } from './types';
 import { promptAndReportBug } from './BugReporter';
 import { setVenvDir } from './VenvManager';
+import { disposeAll as disposeProcessPool } from './ProcessPool';
 
 // ── Activation ────────────────────────────────────────────────────────────────
 
@@ -852,7 +853,9 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(projectView, sessionView, projectTree, epistemicBar);
 }
 
-export function deactivate(): void { /* context.subscriptions handles cleanup */ }
+export function deactivate(): void {
+  disposeProcessPool(); // kill all pooled agent processes
+}
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 

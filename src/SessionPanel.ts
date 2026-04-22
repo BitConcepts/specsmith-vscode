@@ -7,6 +7,7 @@ import { SpecsmithBridge } from './bridge';
 import { SpecsmithEvent, WebviewMessage, SessionConfig, SessionStatus } from './types';
 import { ApiKeyManager } from './ApiKeyManager';
 import { fetchModels, getStaticModels } from './ModelRegistry';
+import * as ProcessPool from './ProcessPool';
 
 /** Per-project saved session settings. */
 interface SavedSettings { provider: string; model: string; }
@@ -215,7 +216,10 @@ export class SessionPanel implements vscode.Disposable {
     this._secrets     = secrets;
     this._globalState = globalState;
     this._initChatHistory();
-    this._bridge  = new SpecsmithBridge(execPath, config, envOverrides, ollamaCtx);
+    this._bridge  = ProcessPool.acquire(
+      config.projectDir,
+      () => new SpecsmithBridge(execPath, config, envOverrides, ollamaCtx),
+    );
 
     this._panel.webview.html = this._html();
 
@@ -356,7 +360,8 @@ export class SessionPanel implements vscode.Disposable {
     }
     this._status = 'inactive';
     for (const fn of _statusListeners) { try { fn(this, 'inactive'); } catch { /* noop */ } }
-    this._bridge.dispose();
+    // Release bridge to pool (keeps process alive for 10 min) instead of killing
+    ProcessPool.release(this._config.projectDir);
     this._chatStream?.end();
     this._chatStream = undefined;
     this._panel.dispose();
