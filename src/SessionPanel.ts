@@ -573,59 +573,73 @@ export class SessionPanel implements vscode.Disposable {
     }
   }
 
-  /** Non-blocking governance check — emits detailed messages and offers agent walkthrough. */
+  /** Non-blocking governance check — emits detailed messages and auto-fixes. */
   private _checkGovernance(): void {
     const dir  = this._config.projectDir;
     const emit = (msg: string) =>
       void this._panel.webview.postMessage({ type: 'system', message: msg } satisfies SpecsmithEvent);
     const issues: string[] = [];
+    const fixes: string[] = [];
 
     try {
       // No scaffold.yml
       if (!fs.existsSync(path.join(dir, 'scaffold.yml'))) {
-        issues.push('scaffold.yml not found — run specsmith init or specsmith import');
+        issues.push('scaffold.yml not found');
+        fixes.push('Run specsmith init or specsmith import to create it');
       }
 
       // Missing key governance files
-      const required: Array<[string, string]> = [
-        ['AGENTS.md', 'specsmith import --project-dir .'],
-        ['LEDGER.md', 'specsmith audit --fix --project-dir .'],
+      const govChecks: Array<[string, string[]]> = [
+        ['AGENTS.md', ['.']],
+        ['LEDGER.md', ['.']],
+        ['docs/REQUIREMENTS.md', ['docs', 'REQUIREMENTS.md']],
+        ['docs/ARCHITECTURE.md', ['docs', 'ARCHITECTURE.md', 'docs/architecture.md']],
+        ['docs/TEST_SPEC.md', ['docs']],
       ];
-      for (const [f, fix] of required) {
-        if (!fs.existsSync(path.join(dir, f))) {
-          issues.push(`${f} missing — fix: ${fix}`);
+      for (const [f, altPaths] of govChecks) {
+        const found = altPaths.some(p => fs.existsSync(path.join(dir, p === '.' ? f : p)));
+        if (!found) {
+          issues.push(`${f} missing`);
         }
       }
 
       // Duplicate requirements
       if (fs.existsSync(path.join(dir, 'REQUIREMENTS.md')) && fs.existsSync(path.join(dir, 'docs', 'REQUIREMENTS.md'))) {
-        issues.push('Both REQUIREMENTS.md and docs/REQUIREMENTS.md exist — docs/ version is canonical');
+        issues.push('Duplicate REQUIREMENTS.md (root + docs/) \u2014 docs/ is canonical');
       }
 
-      // Legacy lowercase architecture
+      // Legacy files
       if (fs.existsSync(path.join(dir, 'docs', 'architecture.md')) && !fs.existsSync(path.join(dir, 'docs', 'ARCHITECTURE.md'))) {
-        issues.push('docs/architecture.md should be ARCHITECTURE.md — run specsmith upgrade');
+        issues.push('docs/architecture.md needs rename to ARCHITECTURE.md');
+        fixes.push('specsmith upgrade');
       }
-
-      // Legacy WORKFLOW.md
       if (fs.existsSync(path.join(dir, 'docs', 'governance', 'WORKFLOW.md'))) {
-        issues.push('docs/governance/WORKFLOW.md is legacy — run specsmith upgrade to migrate to SESSION-PROTOCOL.md');
+        issues.push('Legacy WORKFLOW.md needs migration to SESSION-PROTOCOL.md');
+        fixes.push('specsmith upgrade');
       }
 
-      if (issues.length > 0) {
-        emit(`\u26a0 Governance check found ${issues.length} issue(s):\n${issues.map(i => `  \u2022 ${i}`).join('\n')}`);
-        // Auto-fix: run specsmith audit --fix first, then ask agent about remaining issues
-        setTimeout(() => {
-          this._bridge.send(
-            '[RESPOND IN ENGLISH ONLY] ' +
-            'Run specsmith audit --fix to auto-repair governance issues. ' +
-            'Then check if these remain:\n' + issues.join('\n') + '\n' +
-            'Fix each one automatically without asking for permission. ' +
-            'Report what you fixed in 2-3 sentences.',
-          );
-        }, 1500);
+      if (issues.length === 0) {
+        emit('\u2713 Governance check passed \u2014 all key files present');
+        return;
       }
-    } catch { /* ignore — non-blocking */ }
+
+      emit(`\u26a0 Found ${issues.length} governance issue(s):\n${issues.map(i => `  \u2022 ${i}`).join('\n')}\n\n\u2699 Auto-fixing\u2026`);
+
+      // Auto-fix via agent
+      setTimeout(() => {
+        this._bridge.send(
+          '[RESPOND IN ENGLISH ONLY] ' +
+          'The governance check found issues. Fix them in this order:\n' +
+          '1. Run specsmith audit --fix to auto-repair what it can\n' +
+          '2. For each remaining issue, fix it directly:\n' +
+          issues.map((iss, i) => `   ${i + 1}. ${iss}`).join('\n') + '\n' +
+          '3. If ARCHITECTURE.md is missing, create a minimal one based on the project structure\n' +
+          '4. If REQUIREMENTS.md is missing, create a minimal one with at least 3 requirements\n' +
+          '5. If TEST_SPEC.md is missing, create it with test cases for the requirements\n' +
+          'Do NOT ask for permission. Fix everything and report what you did.',
+        );
+      }, 1500);
+    } catch { /* ignore \u2014 non-blocking */ }
   }
 
   /**

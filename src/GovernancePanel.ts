@@ -115,7 +115,7 @@ interface GovMsg {
     | 'saveScaffold' | 'runCommand' | 'sendToAgent' | 'openFile' | 'refresh'
     | 'addFile' | 'detectLanguages' | 'phaseNext' | 'phaseSet' | 'scanProject'
     | 'saveExecution' | 'scanTools' | 'toolInstall' | 'detectTools' | 'detectDisciplines'
-    | 'reportIssue' | 'agentTask' | 'saveAgentConfig';
+    | 'reportIssue' | 'agentTask' | 'saveAgentConfig' | 'loadAgentModels';
   scaffold?: ScaffoldData; cmd?: string; prompt?: string; file?: string; addType?: string;
   phaseKey?: string;
   profileName?: string; customAllowed?: string; customBlocked?: string; customBlockedTools?: string;
@@ -470,6 +470,20 @@ async function _handleMsg(msg: GovMsg): Promise<void> {
     case 'reportIssue':
       void vscode.commands.executeCommand('specsmith.reportIssue');
       break;
+
+    case 'loadAgentModels': {
+      // Load installed Ollama models for the Agent tab dropdown
+      void (async () => {
+        try {
+          const { OllamaManager } = await import('./OllamaManager');
+          const ids = await OllamaManager.getInstalledIds();
+          _panel?.webview.postMessage({ type: 'agentModels', models: ids });
+        } catch {
+          _panel?.webview.postMessage({ type: 'agentModels', models: [] });
+        }
+      })();
+      break;
+    }
 
     case 'saveAgentConfig': {
       // Save agent settings to scaffold.yml under agents: key
@@ -953,6 +967,10 @@ function _html(data: ProjectData): string {
         `<td><button class="add-btn" onclick="addFile('${f.addCmd ?? f.rel}')">${f.addCmd === 'rename' ? 'Rename' : 'Add'}</button></td></tr>`;
   }).join('');
 
+  // Pre-compute global defaults for Agent tab (avoid esbuild mangling in template)
+  const _globalProvider = vscode.workspace.getConfiguration('specsmith').get<string>('defaultProvider', 'ollama');
+  const _globalModel = vscode.workspace.getConfiguration('specsmith').get<string>('defaultModel', '') || 'auto';
+
   // Build phase-aware prompt HTML (must be done outside the template literal)
   const _guidedLabel = (() => { const c = PHASE_CATALOG[data.phase.key]; return c ? c.emoji + ' ' + c.label : data.phase.label; })();
   const _guidedPrompt = JSON.stringify(GUIDED_PROMPTS[data.phase.key] ?? GUIDED_PROMPTS.inception);
@@ -1240,11 +1258,11 @@ ${_alwaysPromptsHtml}
 <!-- Agent tab -->
 <div id="t-agent" class="tab-pane">
 <h3>Project Agent Configuration</h3>
-<div class="info-box" style="font-size:10px">Per-project overrides. Empty = use global default. Saved to <code>scaffold.yml</code>.</div>
+<div class="info-box" style="font-size:10px">Per-project overrides. Empty = use global default (<b>${_globalProvider}</b> / <b>${_globalModel}</b>). Saved to <code>scaffold.yml</code>.</div>
 <div class="row">
   <div class="fg"><label class="fl">Provider</label>
     <select id="ag-provider">
-      <option value="">(global default)</option>
+      <option value="">(global: ${_globalProvider})</option>
       <option value="ollama"${(s as Record<string,any>).agent_provider === 'ollama' ? ' selected' : ''}>Ollama (local)</option>
       <option value="anthropic"${(s as Record<string,any>).agent_provider === 'anthropic' ? ' selected' : ''}>Anthropic</option>
       <option value="openai"${(s as Record<string,any>).agent_provider === 'openai' ? ' selected' : ''}>OpenAI</option>
@@ -1252,7 +1270,10 @@ ${_alwaysPromptsHtml}
     </select>
   </div>
   <div class="fg"><label class="fl">Model</label>
-    <input type="text" id="ag-model" value="${(s as Record<string,any>).agent_model ?? ''}" placeholder="e.g. qwen2.5:14b">
+    <select id="ag-model">
+      <option value="">(global: ${_globalModel})</option>
+    </select>
+    <div class="dim" style="font-size:9px;margin-top:2px">Models load from Ollama when tab opens</div>
   </div>
 </div>
 <div class="fg"><label class="fl">Context Length</label>
@@ -1289,10 +1310,11 @@ var LANGUAGES=JSON.parse(document.getElementById('_langs').textContent||'[]');
 var FPGA_TOOLS=JSON.parse(document.getElementById('_fpga').textContent||'[]');
 
 function sw(id){
-  const tabs=['project','tools','files','actions','execution','agent'];
-  document.querySelectorAll('.tab').forEach((t,i)=>t.classList.toggle('active',tabs[i]===id));
-  document.querySelectorAll('.tab-pane').forEach(p=>p.classList.toggle('active',p.id==='t-'+id));
+  var tabs=['project','tools','files','actions','execution','agent'];
+  document.querySelectorAll('.tab').forEach(function(t,i){t.classList.toggle('active',tabs[i]===id);});
+  document.querySelectorAll('.tab-pane').forEach(function(p){p.classList.toggle('active',p.id==='t-'+id);});
   if(id==='execution')scanToolsNow();
+  if(id==='agent')vscode.postMessage({command:'loadAgentModels'});
 }
 function saveAgent(){
   vscode.postMessage({command:'saveAgentConfig',
@@ -1436,6 +1458,21 @@ window.addEventListener('message',({data})=>{
       document.querySelectorAll('input[name=aux_disc]').forEach(cb=>{
         cb.checked=r.auxiliary_disciplines.includes(cb.value);
         cb.closest('.chip')?.classList.toggle('sel',cb.checked);
+      });
+    }
+  }
+  if(data.type==='agentModels'){
+    var sel=document.getElementById('ag-model');
+    if(sel){
+      var cur=sel.value||'';
+      var first=sel.options[0];
+      sel.innerHTML='';
+      if(first)sel.appendChild(first);
+      (data.models||[]).forEach(function(m){
+        var o=document.createElement('option');
+        o.value=m;o.textContent=m;
+        if(m===cur)o.selected=true;
+        sel.appendChild(o);
       });
     }
   }
