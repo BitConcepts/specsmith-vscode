@@ -944,8 +944,8 @@ function csize(m){const l=(m||'').toLowerCase();for(const[k,v]of Object.entries(
 function ts(){return new Date().toLocaleString([],{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit'})}
 function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
 function rmd(r){
-  let s=esc(r);
-  s=s.replace(/\`\`\`(\\S*)\\n([\\s\\S]*?)\`\`\`/g,(_,_l,c)=>\`<pre><code>\${c}</code></pre>\`);
+  var s=esc(r);
+  s=s.replace(/\`\`\`(\\S*)\\n([\\s\\S]*?)\`\`\`/g,function(_,_l,c){return '<pre><code>'+c+'</code></pre>';});
   s=s.replace(/\`([^\`]+)\`/g,'<code>$1</code>');
   s=s.replace(/\\*\\*([^*]+)\\*\\*/g,'<strong>$1</strong>');
   s=s.replace(/\\*([^*]+)\\*/g,'<em>$1</em>');
