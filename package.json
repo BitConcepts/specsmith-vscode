@@ -2,7 +2,7 @@
   "name": "specsmith-vscode",
   "displayName": "specsmith - AEE Workbench",
   "description": "Applied Epistemic Engineering workbench. 6-tab Settings panel, AI agent sessions, execution profiles, FPGA/HDL tool support, Ollama local LLMs, and tool installer.",
-  "version": "0.3.13",
+  "version": "0.3.14-dev.1",
   "publisher": "BitConcepts",
   "license": "MIT",
   "engines": {
