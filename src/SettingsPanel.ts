@@ -397,10 +397,10 @@ function _parseVer(v: string): [number, number, number, number] {
   const m = v.match(/^(\d+)\.(\d+)\.(\d+)(?:\.dev(\d+)|a(\d+)|b(\d+)|rc(\d+))?/);
   if (!m) { return [0, 0, 0, 0]; }
   let pre = 999999;
-  if (m[4] !== undefined)      { pre = parseInt(m[4], 10); }
-  else if (m[5] !== undefined) { pre = 10000 + parseInt(m[5], 10); }
-  else if (m[6] !== undefined) { pre = 20000 + parseInt(m[6], 10); }
-  else if (m[7] !== undefined) { pre = 30000 + parseInt(m[7], 10); }
+  if (m[4] !== undefined)      { pre = parseInt(m[5] ?? '0', 10); }  // .devN — m[4]='dev', m[5]=N
+  else if (m[6] !== undefined) { pre = 10000 + parseInt(m[6], 10); }  // aN
+  else if (m[7] !== undefined) { pre = 20000 + parseInt(m[7], 10); }  // bN
+  else if (m[8] !== undefined) { pre = 30000 + parseInt(m[8], 10); }  // rcN
   return [parseInt(m[1], 10), parseInt(m[2], 10), parseInt(m[3], 10), pre];
 }
 
