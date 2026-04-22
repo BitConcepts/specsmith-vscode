@@ -526,6 +526,8 @@ async function _upgradeOllama(): Promise<void> {
   const out = _out();
   out.show(true);
   out.appendLine('\u2500\u2500 Upgrade Ollama \u2500\u2500');
+  // Tell webview the upgrade is in progress
+  _panel?.webview.postMessage({ type: 'ollamaUpgrading' });
 
   if (process.platform === 'win32') {
     out.appendLine('Downloading OllamaSetup.exe...');
@@ -547,7 +549,7 @@ async function _upgradeOllama(): Promise<void> {
         }
       });
       try { fsM.unlinkSync(exePath); } catch { /* ignore */ }
-      if (ok) { out.appendLine('\u2713 Ollama upgraded.'); } else { out.appendLine('\u274c Installer failed.'); }
+      out.appendLine(ok ? '\u2713 Ollama upgraded.' : '\u274c Installer failed.');
     } catch (err) {
       out.appendLine(`Download failed: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -557,7 +559,9 @@ async function _upgradeOllama(): Promise<void> {
       'Upgrade Ollama',
     );
   }
+  // Re-check and refresh panel
   void _checkOllamaVersion();
+  _reload();
 }
 
 /** Download a URL to a local file, following up to 10 redirects. */
@@ -586,11 +590,16 @@ async function _downloadFile(url: string, dest: string, out: vscode.OutputChanne
         const file = fsM.createWriteStream(dest);
         const total = parseInt(res.headers['content-length'] ?? '0', 10);
         let downloaded = 0;
+        let lastPct = -1;
         res.on('data', (chunk: Buffer) => {
           downloaded += chunk.length;
           if (total > 0) {
             const pct = Math.round(downloaded / total * 100);
-            out.replace(`Downloading... ${pct}% (${(downloaded / 1048576).toFixed(1)} MB)`);
+            // Only log every 10% to avoid flooding the output channel
+            if (pct >= lastPct + 10) {
+              lastPct = pct;
+              out.appendLine(`  ${pct}% (${(downloaded / 1048576).toFixed(1)} / ${(total / 1048576).toFixed(1)} MB)`);
+            }
           }
         });
         res.pipe(file);
@@ -938,7 +947,11 @@ function chkOllama(){
   document.getElementById('ollama-chk-btn').textContent='\u23f3\u2026';
   vscode.postMessage({command:'checkOllamaVersion'});
 }
-function ollamaUpgrade(){vscode.postMessage({command:'ollamaUpgrade'})}
+function ollamaUpgrade(){
+  var btn=document.getElementById('ollama-upg-btn');
+  if(btn){btn.textContent='\u23f3 Installing\u2026';btn.disabled=true;btn.style.opacity='0.7';}
+  vscode.postMessage({command:'ollamaUpgrade'});
+}
 function setDef(name){
   vscode.postMessage({command:'setDefaultOllamaModel',value:name});
   var cards=document.getElementById('ollama-mdl-cards');
@@ -1071,6 +1084,10 @@ window.addEventListener('message',({data})=>{
     if(ge)ge.textContent=data.vram>0?data.vram+' GB VRAM':'No GPU detected';
     if(re2)re2.textContent=data.rec+' tokens (based on '+data.vram+' GB VRAM)';
     if(cs&&data.currentCtx!==undefined)cs.value=String(data.currentCtx);
+  }
+  if(data.type==='ollamaUpgrading'){
+    var oub=document.getElementById('ollama-upg-btn');
+    if(oub){oub.textContent='\u23f3 Installing\u2026';oub.disabled=true;oub.style.opacity='0.7';}
   }
   if(data.type==='ollamaVersionInfo'){
     var oChk=document.getElementById('ollama-chk-btn');
