@@ -197,7 +197,8 @@ async function _handleMsg(msg: Msg): Promise<void> {
         // Read version via Python import (not marker, which we just invalidated)
         const newVer = getVenvSpecsmithVersion();
         if (newVer) { writeVersionMarker(newVer); }
-        _panel?.webview.postMessage({ type: 'installDone', version: newVer ?? '', ok });
+        // Refresh the entire panel so Environment section updates
+        _reload();
       })();
       break;
     }
@@ -238,10 +239,11 @@ async function _handleMsg(msg: Msg): Promise<void> {
     case 'updateVenv': {
       const ch2 = vscode.workspace.getConfiguration('specsmith').get<string>('releaseChannel', 'stable') as 'stable' | 'pre-release';
       void (async () => {
-        const ok = await _runSteps(buildUpdateSteps(ch2), `Update specsmith (${ch2})`);
+        await _runSteps(buildUpdateSteps(ch2), `Update specsmith (${ch2})`);
+        invalidateVersionMarker();
         const newVer = getVenvSpecsmithVersion();
         if (newVer) { writeVersionMarker(newVer); }
-        _panel?.webview.postMessage({ type: 'installDone', version: newVer ?? '', ok });
+        _reload();
       })();
       break;
     }
@@ -889,22 +891,6 @@ window.addEventListener('message',({data})=>{
           row.appendChild(upd);
         }
       }else if(installed){document.getElementById('ver-avail').textContent=data.available+' \u2713 (current)';}
-    }
-  }
-  if(data.type==='installDone'){
-    // Install finished — replace Installing button with Restart button inline
-    const row=document.getElementById('chk-btn')?.closest('.btn-row');
-    if(row){
-      const old=row.querySelector('.btn-upd');
-      if(old)old.remove();
-      const rel=document.createElement('button');rel.className='btn btn-rel';rel.style.cssText='background:var(--teal);color:#000;font-weight:700';
-      rel.textContent='\u21BA Restart VS Code';rel.onclick=()=>vscode.postMessage({command:'reloadWindow'});row.appendChild(rel);
-    }
-    // Update displayed version
-    if(data.version){
-      document.getElementById('ver-installed').textContent=data.version;
-      INST_VER=data.version;
-      document.getElementById('ver-avail').textContent=data.version+' \u2713 (current)';
     }
   }
   if(data.type==='sysInfo'){
