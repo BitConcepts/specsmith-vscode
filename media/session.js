@@ -217,7 +217,7 @@ function updTok(i,o,c){const t=i+o,sz=csize(curMdl),p=Math.min(100,Math.round(t/
   if(p>=70&&!warned){warned=true;document.getElementById('obn').classList.add('show');
     document.getElementById('obt').textContent=`Context ${p}% — /clear or Audit/Compress`}}
 function mainAct(){if(busy)stp();else snd()}
-function setBusy(v){busy=v;document.getElementById('it').disabled=v;
+function setBusy(v){busy=v;var pb=document.querySelector('.proposal-btns');if(pb&&v)pb.remove();document.getElementById('it').disabled=v;
   document.getElementById('typ').className=v?'show':'';
   const b=document.getElementById('mainbtn');
   b.textContent=v?'◼':'↑';b.title=v?'Stop agent (click or Esc)':'Send (Enter)';
@@ -442,8 +442,12 @@ window.addEventListener('message',({data})=>{switch(data.type){
       i.focus();
     }break;
   case 'proposal':{
+    // Remove any existing proposal buttons first
+    var old=document.querySelector('.proposal-btns');
+    if(old)old.remove();
     var pd=document.createElement('div');
-    pd.style.cssText='display:flex;gap:6px;padding:4px 8px;align-self:flex-start';
+    pd.className='proposal-btns';
+    pd.style.cssText='display:flex;gap:6px;padding:6px 8px;margin:2px 0;align-self:flex-start;background:var(--sf);border:1px solid var(--br);border-radius:6px';
     var ab=document.createElement('button');
     ab.textContent='\u2713 Accept';
     ab.style.cssText='background:var(--bb);color:var(--bf);border:none;border-radius:4px;padding:3px 10px;cursor:pointer;font-size:11px;font-weight:600';
