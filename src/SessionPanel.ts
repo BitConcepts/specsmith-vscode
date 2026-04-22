@@ -247,10 +247,12 @@ export class SessionPanel implements vscode.Disposable {
       // Track if the current turn contains a proposal-like phrase
       if (e.type === 'llm_chunk' && e.text) {
         const t = e.text.toLowerCase();
-        // Only match explicit proposal language, not casual questions
+        // Match proposal language — both explicit and conversational
         if (t.includes('shall i proceed') || t.includes('ready to proceed') ||
             t.includes('do you approve') || t.includes('shall i apply') ||
-            t.includes('shall i implement') || t.includes('shall i make these changes')) {
+            t.includes('shall i implement') || t.includes('shall i make these changes') ||
+            t.includes('would you like to proceed') || t.includes('would you like me to') ||
+            t.includes('want me to go ahead') || t.includes('should i continue')) {
           this._pendingProposal = true;
         }
       }
