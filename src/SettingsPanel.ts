@@ -535,6 +535,8 @@ async function _upgradeOllama(): Promise<void> {
     try {
       const fsM = await import('fs');
       await _downloadFile('https://ollama.com/download/OllamaSetup.exe', exePath, out);
+      // Wait for OS to fully release the file handle (EBUSY fix)
+      await new Promise((r) => setTimeout(r, 1500));
       out.appendLine('Running installer (silent)...');
       const ok = await new Promise<boolean>((resolve) => {
         try {
@@ -603,7 +605,10 @@ async function _downloadFile(url: string, dest: string, out: vscode.OutputChanne
           }
         });
         res.pipe(file);
-        file.on('finish', () => { file.close(); out.appendLine(''); resolve(); });
+        file.on('finish', () => {
+          // file.close takes a callback — resolve AFTER the handle is released
+          file.close(() => { out.appendLine(''); resolve(); });
+        });
         file.on('error', reject);
       });
       req.on('error', reject);
