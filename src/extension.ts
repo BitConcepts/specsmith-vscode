@@ -20,6 +20,7 @@ import { OllamaManager, TASK_SUGGESTIONS } from './OllamaManager';
 import { SessionStatus } from './types';
 import { promptAndReportBug } from './BugReporter';
 import { setVenvDir } from './VenvManager';
+import { disposeAll as disposeProcessPool } from './ProcessPool';
 
 // ── Activation ────────────────────────────────────────────────────────────────
 
@@ -97,8 +98,13 @@ export function activate(context: vscode.ExtensionContext): void {
     sessionTree.refresh();
     projectTree.refresh();
     projectTree.addProject(projectDir);
-    // Open global Settings alongside the session
-    showSettingsPanel(context);
+    // Open project settings alongside the session
+    showGovernancePanel(
+      context,
+      projectDir,
+      (text) => SessionPanel.current()?.sendCommand(text),
+      async () => { await openSession(projectDir); },
+    );
   }
 
   // ── Commands: Sessions ───────────────────────────────────────────────────
@@ -847,7 +853,9 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(projectView, sessionView, projectTree, epistemicBar);
 }
 
-export function deactivate(): void { /* context.subscriptions handles cleanup */ }
+export function deactivate(): void {
+  disposeProcessPool(); // kill all pooled agent processes
+}
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -1088,8 +1096,11 @@ async function _autoOpenGovernancePanel(
   // Focus the specsmith sidebar first so the user sees it
   void vscode.commands.executeCommand('workbench.view.extension.specsmith');
 
-  // Global Settings always opens — no project required
-  showSettingsPanel(context);
+  // Global Settings: only restore if it was previously left open
+  const settingsWasOpen = context.globalState.get<boolean>('specsmith.settingsPanelOpen', false);
+  if (settingsWasOpen) {
+    showSettingsPanel(context);
+  }
 
   // Project Settings only when a project folder is available
   const workspaceDir =
@@ -1127,7 +1138,7 @@ async function _startupFetchModels(context: vscode.ExtensionContext): Promise<vo
  * This is called before every session open so nothing runs without an env.
  */
 async function _ensureVenv(context: vscode.ExtensionContext): Promise<boolean> {
-  const { venvExists, buildCreateVenvCommands, getGlobalVenvDir } = await import('./VenvManager');
+  const { venvExists, getGlobalVenvDir, buildCreateVenvSteps, writeVersionMarker, getVenvSpecsmithVersion } = await import('./VenvManager');
   if (venvExists()) { return true; }
 
   const action = await vscode.window.showWarningMessage(
@@ -1140,30 +1151,12 @@ async function _ensureVenv(context: vscode.ExtensionContext): Promise<boolean> {
   );
   if (action !== 'Create Environment Now') { return false; }
 
-  const channel = vscode.workspace.getConfiguration('specsmith')
-    .get<string>('releaseChannel', 'stable') as 'stable' | 'pre-release';
-  const providerPkgMap: Record<string, string> = {
-    anthropic: 'anthropic', openai: 'openai',
-    gemini: 'google-generativeai', mistral: 'mistralai',
-  };
-  const providers: string[] = [];
-  for (const [prov, pkg] of Object.entries(providerPkgMap)) {
-    const key = await ApiKeyManager.getKey(context.secrets, prov);
-    if (key) { providers.push(pkg); }
-  }
-
-  const cmds = buildCreateVenvCommands(channel, providers);
-  const term = vscode.window.createTerminal({ name: 'specsmith: create environment', shellPath: _shellPath() });
-  // Join with ; — works in both powershell.exe (PS5) and pwsh (PS7)
-  term.sendText(cmds.join('; '));
-  term.show();
+  // Open Settings panel which has the Create Environment button + progress
+  void vscode.commands.executeCommand('specsmith.showSettings');
   void vscode.window.showInformationMessage(
-    'Creating specsmith environment in terminal. Reload VS Code when done, then open your session.',
-    'Reload Now',
-  ).then((a) => {
-    if (a === 'Reload Now') { void vscode.commands.executeCommand('workbench.action.reloadWindow'); }
-  });
-  return false; // not ready yet — user must reload after setup completes
+    'Use the Environment tab in specsmith Settings to create the environment.',
+  );
+  return false;
 }
 
 /**

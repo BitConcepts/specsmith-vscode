@@ -7,6 +7,7 @@ import { SpecsmithBridge } from './bridge';
 import { SpecsmithEvent, WebviewMessage, SessionConfig, SessionStatus } from './types';
 import { ApiKeyManager } from './ApiKeyManager';
 import { fetchModels, getStaticModels } from './ModelRegistry';
+import * as ProcessPool from './ProcessPool';
 
 /** Per-project saved session settings. */
 interface SavedSettings { provider: string; model: string; }
@@ -215,11 +216,25 @@ export class SessionPanel implements vscode.Disposable {
     this._secrets     = secrets;
     this._globalState = globalState;
     this._initChatHistory();
-    this._bridge  = new SpecsmithBridge(execPath, config, envOverrides, ollamaCtx);
+    this._bridge  = ProcessPool.acquire(
+      config.projectDir,
+      () => new SpecsmithBridge(execPath, config, envOverrides, ollamaCtx),
+    );
 
     this._panel.webview.html = this._html();
 
     this._bridge.onEvent((e: SpecsmithEvent) => {
+      // Suppress raw JSON leaked by the LLM into text output.
+      // Local models (Qwen, DeepSeek) often emit tool calls or structured
+      // responses as plain JSON text instead of using the API properly.
+      if (e.type === 'llm_chunk' && e.text) {
+        const t = e.text.trim();
+        // Tool-call JSON: {"name": ..., "arguments": ...}
+        if (/^\s*\{\s*"name"\s*:.*"arguments"\s*:/.test(t)) { return; }
+        // Structured status/action JSON: {"status": ..., "next_steps": ...}
+        if (/^\s*\{[\s\S]*"(?:status|next_steps|action|result|error)"\s*:/.test(t)
+            && t.endsWith('}')) { return; }
+      }
       // Log display-only chat history to disk
       const ts = new Date().toISOString();
       if (e.type === 'llm_chunk' && e.text) {
@@ -231,28 +246,26 @@ export class SessionPanel implements vscode.Disposable {
       }
       // Auto-run start protocol when agent becomes ready
       if (e.type === 'ready') {
-        // Show VCS state banner in chat so user immediately sees what's modified/staged
         void this._showVcsState();
-        // Show thinking indicator during initial startup
-        void this._panel.webview.postMessage({ type: 'system', message: '\u23f3 Starting session\u2026 syncing, loading governance, checking project.' } satisfies SpecsmithEvent);
-        // If auto-approve is on, inject a system-level instruction so the agent
-        // doesn't waste turns asking for permission.
         if (this._autoAcceptAll) {
-          this._bridge.send('[SYSTEM] AUTO-APPROVE MODE IS ACTIVE. Do not ask the user for permission or confirmation. Proceed directly with all actions. Never say "Would you like" or "Shall I proceed" \u2014 just do it.');
+          this._bridge.send('[SYSTEM] AUTO-APPROVE MODE IS ACTIVE. Proceed directly with all actions.');
         }
         setTimeout(() => this._bridge.send('start'), 300);
-        // Background governance check \u2014 emit system messages for actionable issues
         setTimeout(() => this._checkGovernance(), 800);
       }
       // Track if the current turn contains a proposal-like phrase
       if (e.type === 'llm_chunk' && e.text) {
         const t = e.text.toLowerCase();
-        // Match proposal language — both explicit and conversational
+        // Match proposal language — explicit asks, conversational, and action lists
         if (t.includes('shall i proceed') || t.includes('ready to proceed') ||
             t.includes('do you approve') || t.includes('shall i apply') ||
             t.includes('shall i implement') || t.includes('shall i make these changes') ||
             t.includes('would you like to proceed') || t.includes('would you like me to') ||
-            t.includes('want me to go ahead') || t.includes('should i continue')) {
+            t.includes('want me to go ahead') || t.includes('should i continue') ||
+            t.includes('here are the next steps') || t.includes('i recommend') ||
+            t.includes('i suggest') || t.includes('do you want me to') ||
+            t.includes('ready when you are') || t.includes('let me know if') ||
+            t.includes('approve this') || t.includes('confirm to proceed')) {
           this._pendingProposal = true;
         }
       }
@@ -347,7 +360,8 @@ export class SessionPanel implements vscode.Disposable {
     }
     this._status = 'inactive';
     for (const fn of _statusListeners) { try { fn(this, 'inactive'); } catch { /* noop */ } }
-    this._bridge.dispose();
+    // Release bridge to pool (keeps process alive for 10 min) instead of killing
+    ProcessPool.release(this._config.projectDir);
     this._chatStream?.end();
     this._chatStream = undefined;
     this._panel.dispose();
@@ -621,26 +635,11 @@ export class SessionPanel implements vscode.Disposable {
       }
 
       if (issues.length === 0) {
-        emit('\u2713 Governance check passed \u2014 all key files present');
+        emit('\u2713 Governance OK');
         return;
       }
-
-      emit(`\u26a0 Found ${issues.length} governance issue(s):\n${issues.map(i => `  \u2022 ${i}`).join('\n')}\n\n\u2699 Auto-fixing\u2026`);
-
-      // Auto-fix via agent
-      setTimeout(() => {
-        this._bridge.send(
-          '[RESPOND IN ENGLISH ONLY] ' +
-          'The governance check found issues. Fix them in this order:\n' +
-          '1. Run specsmith audit --fix to auto-repair what it can\n' +
-          '2. For each remaining issue, fix it directly:\n' +
-          issues.map((iss, i) => `   ${i + 1}. ${iss}`).join('\n') + '\n' +
-          '3. If ARCHITECTURE.md is missing, create a minimal one based on the project structure\n' +
-          '4. If REQUIREMENTS.md is missing, create a minimal one with at least 3 requirements\n' +
-          '5. If TEST_SPEC.md is missing, create it with test cases for the requirements\n' +
-          'Do NOT ask for permission. Fix everything and report what you did.',
-        );
-      }, 1500);
+      emit(`\u26a0 ${issues.length} issue(s): ${issues.join(', ')}`);
+      void this._panel.webview.postMessage({ type: 'governance_fix', issues } satisfies SpecsmithEvent);
     } catch { /* ignore \u2014 non-blocking */ }
   }
 
@@ -677,21 +676,26 @@ export class SessionPanel implements vscode.Disposable {
       const branch = branchResult.status === 0 ? branchResult.stdout.trim() : '';
       const changeCount = status.stdout.trim().split('\n').filter((l: string) => l.trim()).length;
 
+      // Get additions/deletions from diff
+      let additions = 0, deletions = 0;
+      const diff = cp.spawnSync('git', ['diff', '--numstat'], { cwd: dir, encoding: 'utf8', timeout: 5000 });
+      if (diff.status === 0) {
+        for (const line of diff.stdout.trim().split('\n')) {
+          const [a, d] = line.split('\t');
+          if (a && d && a !== '-') { additions += parseInt(a, 10) || 0; deletions += parseInt(d, 10) || 0; }
+        }
+      }
+
       // Post structured VCS data for the bar
       void this._panel.webview.postMessage({
         type: 'vcs_state',
         branch: branch || '(detached)',
-        changes: statusText === '(clean — no uncommitted changes)' ? 0 : changeCount,
+        changes: statusText === '(clean \u2014 no uncommitted changes)' ? 0 : changeCount,
+        additions,
+        deletions,
         projectDir: dir,
       } satisfies SpecsmithEvent);
-
-      // Format as a compact, readable snapshot
-      const lines: string[] = [
-        `📁 Project: ${dir}`,
-        `🔀 ${branch || '(detached HEAD)'}${changeCount > 0 ? ` · ${changeCount} change(s)` : ' · clean'}`,
-        `🗃 Recent: ${logText.split('\n').join(' │ ')}`,
-      ];
-      emit(lines.join('\n'));
+      // VCS bar shows all this info \u2014 no chat message needed
     } catch { /* not a git repo or git not installed — silently skip */ }
   }
 
@@ -871,11 +875,6 @@ export class SessionPanel implements vscode.Disposable {
   #ibar.da{border-top:2px solid var(--teal);background:rgba(78,201,176,.06)}
   #dh{display:none;text-align:center;color:var(--teal);font-size:11px;padding:2px 0;font-style:italic}
   #ibar.da #dh{display:block}
-  #tmtr{display:flex;align-items:center;gap:8px;padding:3px 10px;background:var(--sf);border-bottom:1px solid var(--br);font-size:11px;color:var(--dim);flex-shrink:0}
-  #ctrk{flex:1;height:4px;background:var(--br);border-radius:2px;overflow:hidden}
-  #cfil{height:100%;width:0%;background:var(--grn);border-radius:2px;transition:width .4s,background .4s}
-  #cpct{min-width:28px;text-align:right}
-  #tcst{color:var(--teal);font-weight:600}
   #obn{display:none;align-items:center;gap:8px;padding:4px 10px;background:rgba(206,145,120,.1);border-top:1px solid var(--amb);font-size:11px;color:var(--amb);flex-shrink:0}
   #obn.show{display:flex}
   #obn button{background:none;border:none;color:var(--amb);cursor:pointer;font-size:13px;margin-left:auto}
@@ -931,13 +930,15 @@ export class SessionPanel implements vscode.Disposable {
 <div id="vcsbar">
   <span>\uD83D\uDD00</span><span class="vb" id="vb">\u2014</span>
   <span id="vchg"></span>
+  <span id="vdiff"></span>
+  <span class="bsep" style="color:var(--br)">\u2502</span>
+  <span style="font-size:9px;color:var(--dim)">ctx</span>
+  <div id="ctrk" style="width:60px;height:4px;background:var(--br);border-radius:2px;overflow:hidden"><div id="cfil" style="height:100%;width:0%;background:var(--grn);border-radius:2px;transition:width .4s,background .4s"></div></div>
+  <span id="cpct" style="font-size:9px;min-width:22px;text-align:right">0%</span>
+  <span id="tcnt" style="font-size:9px;font-family:var(--mn)">0+0</span>
+  <span id="tcst" style="font-size:9px;color:var(--teal);font-weight:600">$0.0000</span>
   <span style="flex:1"></span>
   <span id="vwd" style="font-family:var(--mn);opacity:.7" title=""></span>
-</div>
-<div id="tmtr">
-  <span>Context</span>
-  <div id="ctrk"><div id="cfil"></div></div>
-  <span id="cpct">0%</span><span id="tcnt">0+0</span><span id="tcst">$0.0000</span>
 </div>
 <div id="obn"><span>\u26a0</span><span id="obt">Context high</span>
   <button onclick="document.getElementById('obn').classList.remove('show')">\u2715</button></div>

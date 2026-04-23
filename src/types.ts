@@ -21,7 +21,8 @@ export interface SpecsmithEvent {
     | 'history_agent'   // previous session agent message replay
     | 'tool_crash'      // critical tool failure — fail fast, ask to report
     | 'vcs_state'       // synthetic: git branch + change count for VCS bar
-    | 'proposal';       // synthetic: agent is asking for approval — show accept/reject buttons
+    | 'proposal'        // synthetic: agent is asking for approval — show accept/reject buttons
+    | 'governance_fix'; // synthetic: governance issues found — show Fix/Skip buttons
 
   // ready
   provider?: string;
@@ -65,6 +66,11 @@ export interface SpecsmithEvent {
   // vcs_state
   branch?: string;
   changes?: number;
+  additions?: number;
+  deletions?: number;
+
+  // governance_fix
+  issues?: string[];
 
   // tool_crash
   tool?: string;

@@ -127,6 +127,24 @@ export function findSpecsmith(configured: string, envPath: string): string {
 }
 
 const TURN_TIMEOUT_MS = 15 * 60 * 1000; // 15 min: Ollama model load + inference + tool calls
+const SERVE_PORT = 8421;
+
+/** Probe whether a specsmith serve instance is running on localhost. */
+export async function probeServe(port = SERVE_PORT): Promise<boolean> {
+  const http = require('http') as typeof import('http');
+  return new Promise((resolve) => {
+    const req = http.get(`http://127.0.0.1:${port}/api/health`, { timeout: 2000 }, (r) => {
+      let d = '';
+      r.on('data', (c: Buffer) => { d += c; });
+      r.on('end', () => {
+        try { resolve((JSON.parse(d) as { ok?: boolean }).ok === true); }
+        catch { resolve(false); }
+      });
+    });
+    req.on('error', () => resolve(false));
+    req.on('timeout', () => { req.destroy(); resolve(false); });
+  });
+}
 
 export class SpecsmithBridge {
   private _proc: cp.ChildProcess | null = null;
@@ -137,6 +155,10 @@ export class SpecsmithBridge {
   private _pending: string[] = [];
   private _turnTimer: ReturnType<typeof setTimeout> | undefined;
   private _startupTimer: ReturnType<typeof setTimeout> | undefined;
+  private _keepAliveTimer: ReturnType<typeof setInterval> | undefined;
+  private _sseAbort: AbortController | null = null; // for HTTP mode SSE connection
+  private _httpMode = false;
+  private _httpPort = SERVE_PORT;
   private _suppressNextExit = false; // set before voluntary restart to suppress exit message
   private readonly _execPath: string;
   private _config: SessionConfig;
@@ -157,7 +179,16 @@ export class SpecsmithBridge {
 
   // ── Lifecycle ──────────────────────────────────────────────
 
-  public start(): void { this._spawn(); }
+  public start(): void {
+    // Try HTTP serve mode first, fall back to stdio spawn
+    void probeServe(this._httpPort).then((ok) => {
+      if (ok) {
+        this._connectHttp();
+      } else {
+        this._spawn();
+      }
+    });
+  }
 
   public restart(config: SessionConfig, envOverrides?: Record<string, string>): void {
     this._suppressNextExit = true; // switching model/provider — don't show exit message
@@ -189,6 +220,8 @@ export class SpecsmithBridge {
     this._ready = false;
     this._clearTurnTimer();
     this._clearStartupTimer();
+    this._clearKeepAlive();
+    if (this._sseAbort) { this._sseAbort.abort(); this._sseAbort = null; }
     this._rl?.close();
     this._rl = null;
     if (this._proc) {
@@ -201,6 +234,12 @@ export class SpecsmithBridge {
   // ── Messaging ───────────────────────────────────────────────
 
   public send(text: string): void {
+    if (this._httpMode) {
+      this._setStatus('running');
+      this._startTurnTimer();
+      this._httpSend(text);
+      return;
+    }
     // Auto-respawn the agent process if it has died
     if (!this._proc) {
       const ts = new Date().toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -236,6 +275,85 @@ export class SpecsmithBridge {
   }
 
   // ── Private ───────────────────────────────────────────────
+
+  /**
+   * Connect to a running `specsmith serve` via HTTP SSE.
+   * Events come from GET /api/events, messages go via POST /api/send.
+   */
+  private _connectHttp(): void {
+    this._httpMode = true;
+    this._setStatus('starting');
+    this._emit({ type: 'system', message: `🔗 Connected to specsmith serve (http://127.0.0.1:${this._httpPort})` });
+
+    // Start SSE listener
+    const http = require('http') as typeof import('http');
+    const url = `http://127.0.0.1:${this._httpPort}/api/events`;
+    const connectSse = () => {
+      const req = http.get(url, { timeout: 0 }, (res) => {
+        let buf = '';
+        res.on('data', (chunk: Buffer) => {
+          buf += chunk.toString();
+          // Parse SSE frames: "data: {...}\n\n"
+          const parts = buf.split('\n\n');
+          buf = parts.pop() ?? '';
+          for (const part of parts) {
+            if (part.startsWith(': ')) { continue; } // SSE comment/keepalive
+            const match = part.match(/^data:\s*(.+)$/m);
+            if (!match) { continue; }
+            try {
+              const event = JSON.parse(match[1]) as SpecsmithEvent;
+              if (event.type === 'ready') {
+                this._ready = true;
+                this._setStatus('waiting');
+                while (this._pending.length > 0) {
+                  this._httpSend(this._pending.shift()!);
+                }
+              }
+              if (event.type === 'turn_done') {
+                this._clearTurnTimer();
+                this._setStatus('waiting');
+              }
+              if (event.type === 'error') {
+                this._clearTurnTimer();
+                this._setStatus('error');
+              }
+              this._emit(event);
+            } catch { /* malformed SSE frame */ }
+          }
+        });
+        res.on('end', () => {
+          // SSE stream closed — try to reconnect after 2s
+          if (this._httpMode) {
+            setTimeout(connectSse, 2000);
+          }
+        });
+      });
+      req.on('error', () => {
+        // Server gone — fall back to stdio spawn
+        this._httpMode = false;
+        this._emit({ type: 'system', message: 'specsmith serve disconnected — falling back to stdio' });
+        this._spawn();
+      });
+      // Store for cleanup
+      this._sseAbort = { abort: () => req.destroy() } as unknown as AbortController;
+    };
+    connectSse();
+  }
+
+  private _httpSend(text: string): void {
+    try {
+      const http = require('http') as typeof import('http');
+      const body = JSON.stringify({ text });
+      const req = http.request(
+        { hostname: '127.0.0.1', port: this._httpPort, path: '/api/send', method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } },
+        () => { /* response ignored */ },
+      );
+      req.on('error', () => { /* ignore */ });
+      req.write(body);
+      req.end();
+    } catch { /* never crash */ }
+  }
 
   private _spawn(): void {
     this.dispose();
@@ -296,6 +414,7 @@ export class SpecsmithBridge {
         if (event.type === 'ready') {
           this._ready = true;
           this._clearStartupTimer();
+          this._startKeepAlive();
           this._setStatus('waiting');
           while (this._pending.length > 0) {
             this._writeLine(this._pending.shift()!);
@@ -418,6 +537,41 @@ export class SpecsmithBridge {
     if (this._startupTimer !== undefined) {
       clearTimeout(this._startupTimer);
       this._startupTimer = undefined;
+    }
+  }
+
+  /**
+   * Start a periodic Ollama keep-alive ping (every 3 min) to prevent
+   * the model from being unloaded from VRAM.  Only active when the
+   * session provider is Ollama.  The ping sends a zero-token generation
+   * request with keep_alive=10m, which is virtually free.
+   */
+  private _startKeepAlive(): void {
+    this._clearKeepAlive();
+    if (this._config.provider !== 'ollama') { return; }
+    const model = this._config.model || 'qwen2.5:14b';
+    const INTERVAL = 3 * 60 * 1000; // 3 minutes
+    this._keepAliveTimer = setInterval(() => {
+      try {
+        const http = require('http') as typeof import('http');
+        const body = JSON.stringify({ model, prompt: '', keep_alive: '10m' });
+        const req = http.request(
+          { hostname: '127.0.0.1', port: 11434, path: '/api/generate', method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+            timeout: 5000 },
+          () => { /* response ignored */ },
+        );
+        req.on('error', () => { /* Ollama not running — ignore */ });
+        req.write(body);
+        req.end();
+      } catch { /* never crash */ }
+    }, INTERVAL);
+  }
+
+  private _clearKeepAlive(): void {
+    if (this._keepAliveTimer !== undefined) {
+      clearInterval(this._keepAliveTimer);
+      this._keepAliveTimer = undefined;
     }
   }
 }

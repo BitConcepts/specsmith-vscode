@@ -1,5 +1,5 @@
 const vscode=acquireVsCodeApi();
-let curMdl='',busy=false,warned=false,lastU='';
+let curMdl='',busy=false,warned=false,lastU='',proposalCount=0;
 const CTX={claude:200000,'gpt-4o':128000,o1:200000,o3:200000,gemini:1000000,mistral:128000};
 function csize(m){const l=(m||'').toLowerCase();for(const[k,v]of Object.entries(CTX))if(l.includes(k))return v;return 128000}
 function ts(){return new Date().toLocaleString([],{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit'})}
@@ -417,7 +417,7 @@ window.addEventListener('message',({data})=>{switch(data.type){
     if(data.projectDir){const l=document.getElementById('dlbl');l.textContent=data.projectDir.split(/[\/]/).pop()||data.projectDir;l.title=data.projectDir}
     if(data.availableProviders){const ps=document.getElementById('ps');for(const o of ps.options){if(!data.availableProviders.includes(o.value)){o.disabled=true;o.textContent=o.value+' (no key)'}}}break;
   case 'models':popMdl(document.getElementById('ps').value,data.models,curMdl);break;
-  case 'ready':setBusy(false);addS(`AEE Agent ready — ${data.provider||''}/${data.model||''} (${data.tools||0} tools)`);
+  case 'ready':setBusy(true);addS(`AEE Agent ready — ${data.provider||''}/${data.model||''} (${data.tools||0} tools)`);
     if(data.project_dir){const l=document.getElementById('dlbl');l.textContent=data.project_dir.split(/[\/]/).pop();l.title=data.project_dir}break;
   case 'llm_chunk':addA(data.text||'');break;
   case 'tool_started':addTStart(data.name||'?',data.args||{});break;
@@ -428,14 +428,20 @@ window.addEventListener('message',({data})=>{switch(data.type){
   case 'error':addE(data.message);setBusy(false);break;
   case 'system':addS(data.message||'');break;
   case 'vcs_state':{
-    const vb=document.getElementById('vb'),vc=document.getElementById('vchg'),vw=document.getElementById('vwd');
+    const vb=document.getElementById('vb'),vc=document.getElementById('vchg'),vw=document.getElementById('vwd'),vd=document.getElementById('vdiff');
     if(vb)vb.textContent=data.branch||'\u2014';
     if(vc){const n=data.changes||0;vc.textContent=n>0?n+' change'+(n!==1?'s':''):'clean';vc.className=n>0?'vc':'';}
+    if(vd){
+      const a=data.additions||0,d=data.deletions||0;
+      if(a||d){vd.innerHTML='<span style="color:var(--grn);font-weight:600;font-size:9px">+'+a+'</span> <span style="color:var(--red);font-weight:600;font-size:9px">-'+d+'</span>';}
+      else{vd.textContent='';}
+    }
     if(vw&&data.projectDir){const p=data.projectDir.replace(/\\/g,'/');const short=p.split('/').slice(-2).join('/');vw.textContent=short;vw.title=p;}
     break;}
   case 'clear_display':
     C.innerHTML='';
     warned=false;
+    proposalCount=0;
     document.getElementById('obn').classList.remove('show');
     addS(data.message||'Chat cleared.');
     setBusy(false);
@@ -458,7 +464,24 @@ window.addEventListener('message',({data})=>{switch(data.type){
       }
       i.focus();
     }break;
+  case 'governance_fix':{
+    // Show Fix / Skip buttons for governance issues
+    var gd=document.createElement('div');
+    gd.style.cssText='display:flex;gap:6px;padding:6px 8px;margin:2px 0;align-self:flex-start;background:var(--sf);border:1px solid var(--br);border-radius:6px;align-items:center';
+    gd.innerHTML='<span style="font-size:11px;color:var(--amb)">Auto-fix governance issues?</span>';
+    var fb=document.createElement('button');
+    fb.textContent='\u2713 Fix Now';
+    fb.style.cssText='background:var(--bb);color:var(--bf);border:none;border-radius:4px;padding:3px 10px;cursor:pointer;font-size:11px;font-weight:600';
+    fb.onclick=function(){gd.remove();setBusy(true);vscode.postMessage({command:'send',text:'Run specsmith audit --fix to repair all governance issues. Then report what was fixed.'});};
+    var sb=document.createElement('button');
+    sb.textContent='Skip';
+    sb.style.cssText='background:none;border:1px solid var(--br);color:var(--dim);border-radius:4px;padding:3px 10px;cursor:pointer;font-size:11px';
+    sb.onclick=function(){gd.remove();};
+    gd.appendChild(fb);gd.appendChild(sb);
+    C.appendChild(gd);sb2();
+    break;}
   case 'proposal':{
+    proposalCount++;
     // Remove any existing proposal buttons first
     var old=document.querySelector('.proposal-btns');
     if(old)old.remove();
@@ -473,11 +496,15 @@ window.addEventListener('message',({data})=>{switch(data.type){
     rb.textContent='\u2717 Reject';
     rb.style.cssText='background:none;border:1px solid var(--br);color:var(--dim);border-radius:4px;padding:3px 10px;cursor:pointer;font-size:11px';
     rb.onclick=function(){pd.remove();setBusy(true);vscode.postMessage({command:'send',text:'no, skip this'});};
-    var aab=document.createElement('button');
-    aab.textContent='\u2713\u2713 Accept All';
-    aab.style.cssText='background:rgba(78,201,176,.15);border:1px solid var(--teal);color:var(--teal);border-radius:4px;padding:3px 10px;cursor:pointer;font-size:11px;font-weight:600';
-    aab.onclick=function(){pd.remove();setBusy(true);vscode.postMessage({command:'setAutoAccept'});vscode.postMessage({command:'send',text:'yes, proceed with everything'});};
-    pd.appendChild(ab);pd.appendChild(rb);pd.appendChild(aab);
+    pd.appendChild(ab);pd.appendChild(rb);
+    // Only show Accept All after 2+ proposals in the session
+    if(proposalCount>=2){
+      var aab=document.createElement('button');
+      aab.textContent='\u2713\u2713 Accept All';
+      aab.style.cssText='background:rgba(78,201,176,.15);border:1px solid var(--teal);color:var(--teal);border-radius:4px;padding:3px 10px;cursor:pointer;font-size:11px;font-weight:600';
+      aab.onclick=function(){pd.remove();setBusy(true);vscode.postMessage({command:'setAutoAccept'});vscode.postMessage({command:'send',text:'yes, proceed with everything'});};
+      pd.appendChild(aab);
+    }
     C.appendChild(pd);sb2();
     break;}
 }});

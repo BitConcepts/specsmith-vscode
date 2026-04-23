@@ -18,6 +18,48 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
+/** Path to the version marker file inside the venv. */
+function _versionMarkerPath(): string {
+  return path.join(getGlobalVenvDir(), '.specsmith-version');
+}
+
+/** Read the version from the marker file (fast, no process spawn). */
+export function readVersionMarker(): string | null {
+  try {
+    const content = fs.readFileSync(_versionMarkerPath(), 'utf8').trim();
+    return content || null;
+  } catch { return null; }
+}
+
+/** Write the version marker file. Called after successful installs. */
+export function writeVersionMarker(version: string): void {
+  try {
+    const dir = getGlobalVenvDir();
+    if (fs.existsSync(dir)) {
+      fs.writeFileSync(_versionMarkerPath(), version + '\n', 'utf8');
+    }
+  } catch { /* ignore */ }
+}
+
+/**
+ * Watch the version marker file for changes. Calls `onChange` with the
+ * new version whenever the file is written (e.g. after pip install).
+ * Returns a dispose function to stop watching.
+ */
+export function watchVersionMarker(onChange: (ver: string) => void): () => void {
+  const fp = _versionMarkerPath();
+  let last = readVersionMarker() ?? '';
+  const interval = 2000; // poll every 2s (fs.watchFile is polling-based)
+  fs.watchFile(fp, { interval }, () => {
+    const cur = readVersionMarker() ?? '';
+    if (cur && cur !== last) {
+      last = cur;
+      onChange(cur);
+    }
+  });
+  return () => fs.unwatchFile(fp);
+}
+
 // ── Custom venv path (set from specsmith.envPath VS Code setting) ──────────────
 
 /** Module-level override. Empty = use the default ~/.specsmith/venv. */
@@ -62,67 +104,111 @@ export function getVenvPython(): string | null {
   return null;
 }
 
-/** Return the specsmith version installed in the venv, or null. */
+/** Return the specsmith version installed in the venv, or null.
+ *  Prefers the fast marker file; falls back to Python import. */
 export function getVenvSpecsmithVersion(): string | null {
-  const binary = getVenvSpecsmith();
-  if (!binary) { return null; }
+  // Fast path: read marker file (no process spawn)
+  const marker = readVersionMarker();
+  if (marker) { return marker; }
+  // Slow path: use venv Python to import specsmith and read __version__.
+  // This is more reliable than `specsmith --version` because it doesn't
+  // depend on the script shebang (which breaks if the base Python moves).
+  const py = getVenvPython();
+  if (!py) { return null; }
   try {
-    const r = cp.spawnSync(binary, ['--version'], { timeout: 5000, encoding: 'utf8' });
+    const r = cp.spawnSync(py, ['-c', 'import specsmith; print(specsmith.__version__)'], { timeout: 5000, encoding: 'utf8' });
     if (r.status === 0) {
-      const m = (r.stdout ?? '').match(/(\d+\.\d+\.\d+(?:\.dev\d+|a\d+|b\d+|rc\d+)?)/);
-      return m?.[1] ?? null;
+      const ver = (r.stdout ?? '').trim();
+      if (ver) { writeVersionMarker(ver); }
+      return ver || null;
     }
   } catch { /* ignore */ }
   return null;
 }
 
+/** Invalidate the marker file so the next read falls through to a live check. */
+export function invalidateVersionMarker(): void {
+  try { fs.unlinkSync(_versionMarkerPath()); } catch { /* ignore */ }
+}
+
+/** Clean up corrupted pip temp directories (~ prefixed) in site-packages.
+ *  These are created when pip is interrupted mid-install and cause
+ *  'Ignoring invalid distribution' warnings on every pip operation. */
+export function cleanPipTempDirs(): void {
+  const sitePackages = process.platform === 'win32'
+    ? path.join(getGlobalVenvDir(), 'Lib', 'site-packages')
+    : path.join(getGlobalVenvDir(), 'lib', `python${process.version.slice(0, 4)}`, 'site-packages');
+  try {
+    if (!fs.existsSync(sitePackages)) { return; }
+    for (const entry of fs.readdirSync(sitePackages, { withFileTypes: true })) {
+      if (entry.isDirectory() && entry.name.startsWith('~')) {
+        fs.rmSync(path.join(sitePackages, entry.name), { recursive: true, force: true });
+      }
+    }
+  } catch { /* ignore */ }
+}
+
+/** A platform-agnostic command: executable path + argument list. */
+export interface SpawnCmd { exe: string; args: string[]; }
+
 /**
- * Build terminal commands to create the global venv and install specsmith.
- * @param channel   'stable' | 'pre-release'
- * @param providers LLM provider packages to co-install
+ * Build a sequence of spawn-ready commands to create the venv and install specsmith.
+ * Each step is {exe, args} — no shell syntax, works on all platforms.
  */
-export function buildCreateVenvCommands(
+export function buildCreateVenvSteps(
   channel: 'stable' | 'pre-release',
   providers: string[],
-): string[] {
+): SpawnCmd[] {
   const venvPath = getGlobalVenvDir();
-  // On Windows, quoted paths must be prefixed with the & call operator.
-  // Without &, PowerShell treats '"C:\path\exe.exe"' as a string expression
-  // and produces 'Expressions are only allowed as the first element of a pipeline'.
-  const pip = process.platform === 'win32'
-    ? `& "${path.join(venvPath, 'Scripts', 'pip.exe')}"`
-    : `"${path.join(venvPath, 'bin', 'pip')}"`;
-  // pip cannot upgrade itself on Windows — use python -m pip
-  const pythonExe = process.platform === 'win32'
-    ? `& "${path.join(venvPath, 'Scripts', 'python.exe')}"`
-    : `"${path.join(venvPath, 'bin', 'python3')}"`;
-  const specsmithPkg = channel === 'pre-release' ? 'specsmith --pre' : 'specsmith';
-  const providerPkgs = providers.length > 0 ? providers.join(' ') : '';
+  const py = _venvPythonPath(venvPath);
+  const steps: SpawnCmd[] = [
+    { exe: 'python', args: ['-m', 'venv', venvPath, '--prompt', 'specsmith-env'] },
+    { exe: py, args: ['-m', 'pip', 'install', '--quiet', '--upgrade', 'pip'] },
+  ];
+  if (channel === 'pre-release') {
+    steps.push({ exe: py, args: ['-m', 'pip', 'install', '--quiet', '--pre', 'specsmith'] });
+  } else {
+    steps.push({ exe: py, args: ['-m', 'pip', 'install', '--quiet', 'specsmith'] });
+  }
+  if (providers.length > 0) {
+    steps.push({ exe: py, args: ['-m', 'pip', 'install', '--quiet', ...providers] });
+  }
+  return steps;
+}
+
+/**
+ * Build spawn-ready steps to upgrade (or switch channel for) specsmith.
+ * Stable channel uses --force-reinstall to handle downgrade from pre-release.
+ */
+export function buildUpdateSteps(channel: 'stable' | 'pre-release'): SpawnCmd[] {
+  const py = getVenvPython();
+  if (!py) { return []; }
+  if (channel === 'pre-release') {
+    return [
+      { exe: py, args: ['-m', 'pip', 'install', '--upgrade', '--pre', 'specsmith'] },
+    ];
+  }
   return [
-    `python -m venv "${venvPath}" --prompt specsmith-env`,
-    `${pythonExe} -m pip install --quiet --upgrade pip`,
-    `${pip} install --quiet ${specsmithPkg}`,
-    ...(providerPkgs ? [`${pip} install --quiet ${providerPkgs}`] : []),
-    `Write-Host "specsmith environment ready at: ${venvPath}"`,
+    { exe: py, args: ['-m', 'pip', 'install', '--force-reinstall', '--no-deps', 'specsmith'] },
+    { exe: py, args: ['-m', 'pip', 'install', 'specsmith'] },
   ];
 }
 
-/** Build the terminal command to upgrade specsmith inside the existing venv. */
-export function buildUpdateVenvCommand(channel: 'stable' | 'pre-release'): string {
+/** Delete the venv directory. Platform-agnostic (uses Node fs). */
+export function deleteVenvDir(): boolean {
   const venvPath = getGlobalVenvDir();
-  const pip = process.platform === 'win32'
-    ? `& "${path.join(venvPath, 'Scripts', 'pip.exe')}"`
-    : `"${path.join(venvPath, 'bin', 'pip')}"`;
-  return channel === 'pre-release'
-    ? `${pip} install --upgrade --pre specsmith`
-    : `${pip} install --upgrade specsmith`;
+  try {
+    if (fs.existsSync(venvPath)) {
+      fs.rmSync(venvPath, { recursive: true, force: true });
+      return true;
+    }
+  } catch { /* ignore */ }
+  return false;
 }
 
-/** Build terminal commands to delete the global venv. */
-export function buildDeleteVenvCommands(): string[] {
-  const venvPath = getGlobalVenvDir();
-  if (process.platform === 'win32') {
-    return [`if (Test-Path "${venvPath}") { Remove-Item -Recurse -Force "${venvPath}"; Write-Host 'specsmith environment deleted.' } else { Write-Host 'No environment found.' }`];
-  }
-  return [`[ -d "${venvPath}" ] && rm -rf "${venvPath}" && echo 'specsmith environment deleted.' || echo 'No environment found.'`];
+/** Resolve the Python path inside a venv (before the venv may exist). */
+function _venvPythonPath(venvPath: string): string {
+  return process.platform === 'win32'
+    ? path.join(venvPath, 'Scripts', 'python.exe')
+    : path.join(venvPath, 'bin', 'python3');
 }
