@@ -224,16 +224,18 @@ export class SessionPanel implements vscode.Disposable {
     this._panel.webview.html = this._html();
 
     this._bridge.onEvent((e: SpecsmithEvent) => {
-      // Suppress raw JSON leaked by the LLM into text output.
-      // Local models (Qwen, DeepSeek) often emit tool calls or structured
-      // responses as plain JSON text instead of using the API properly.
+      // Strip raw JSON leaked by the LLM into text output.
+      // Local models (Qwen, DeepSeek) emit tool calls or structured
+      // responses as plain JSON text — sometimes at the start, sometimes
+      // embedded mid-text after natural language.
       if (e.type === 'llm_chunk' && e.text) {
-        const t = e.text.trim();
-        // Tool-call JSON: {"name": ..., "arguments": ...}
-        if (/^\s*\{\s*"name"\s*:.*"arguments"\s*:/.test(t)) { return; }
-        // Structured status/action JSON: {"status": ..., "next_steps": ...}
-        if (/^\s*\{[\s\S]*"(?:status|next_steps|action|result|error)"\s*:/.test(t)
-            && t.endsWith('}')) { return; }
+        let t = e.text;
+        // Strip JSON tool-call blocks anywhere in the text: {"name":..., "arguments":...}
+        t = t.replace(/\{\s*"name"\s*:\s*"[^"]+"\s*,\s*"arguments"\s*:\s*\{[^}]*\}\s*\}/g, '').trim();
+        // Strip structured status/action JSON blocks
+        t = t.replace(/\{[\s\S]*?"(?:status|next_steps|action|result|error)"\s*:[\s\S]*?\}/g, '').trim();
+        if (!t) { return; } // entire message was JSON — suppress
+        e = { ...e, text: t }; // pass cleaned text through
       }
       // Log display-only chat history to disk
       const ts = new Date().toISOString();
