@@ -12,7 +12,7 @@ export function showHelp(context: vscode.ExtensionContext): void {
 
   _panel = vscode.window.createWebviewPanel(
     'specsmithHelp',
-    'specsmith — Help',
+    'Help',
     vscode.ViewColumn.Beside,
     { enableScripts: false },
   );
